@@ -216,6 +216,11 @@
         apk = pkgs.stdenv.mkDerivation {
           name = "${pname}-${version}-arm64-v8a.apk";
           inherit src;
+          __structuredAttrs = true;
+          ci = [
+            { action = "sign-apk"; }
+            { action = "release"; }
+          ];
           nativeBuildInputs = [
             flutter
             jdk
