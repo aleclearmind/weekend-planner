@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
+import 'package:html/dom.dart' as html_dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,6 +44,18 @@ class _LinkedEventData {
 
   final DateTime? date;
   final String? locationName;
+}
+
+class _DiscoveredFeedLink {
+  const _DiscoveredFeedLink({
+    required this.priority,
+    required this.url,
+    this.title,
+  });
+
+  final int priority;
+  final Uri url;
+  final String? title;
 }
 
 class PlannerStore extends ChangeNotifier {
@@ -1182,8 +1195,35 @@ class PlannerStore extends ChangeNotifier {
       );
     }
     if (_looksLikeXmlFeed(first)) {
+      final body = _decodeFeedResponse(first);
+      final companion = await _companionCalendarFromXml(
+        body,
+        feedUri: Uri.parse(finalUrl ?? sourceUrl),
+      );
+      if (companion != null) {
+        final response = await _getFeedUrl(companion.url);
+        _ensureSuccess(response);
+        if (!_looksLikeIcs(response)) {
+          throw const FormatException(
+            'The companion calendar link is not an iCalendar feed.',
+          );
+        }
+        final calendarBody = _decodeFeedResponse(response);
+        return _FetchedFeed(
+          body: calendarBody,
+          url: companion.url.toString(),
+          kind: FeedKind.ics,
+          discoveredTitle: companion.title ?? _icsCalendarName(calendarBody),
+        );
+      }
+      if (_looksLikeRunSummaryXml(body)) {
+        throw const FormatException(
+          'This RSS describes event run windows rather than exact '
+          'occurrences, and its companion calendar could not be loaded.',
+        );
+      }
       return _FetchedFeed(
-        body: _decodeFeedResponse(first),
+        body: body,
         url: finalUrl ?? sourceUrl,
         kind: FeedKind.rss,
       );
@@ -1191,8 +1231,77 @@ class PlannerStore extends ChangeNotifier {
 
     final document = html_parser.parse(_decodeFeedResponse(first));
     final pageUri = Uri.parse(finalUrl ?? sourceUrl);
+    final candidates = _feedLinksFromHtml(document, pageUri);
+    if (candidates.isEmpty || !_looksLikeEventFeedUri(candidates.first.url)) {
+      for (final eventPage in _eventPageLinksFromHtml(document, pageUri)) {
+        try {
+          final pageResponse = await _getFeedUrl(eventPage, rawHtml: true);
+          _ensureSuccess(pageResponse);
+          final eventDocument = html_parser.parse(
+            _decodeFeedResponse(pageResponse),
+          );
+          final eventCandidates = _feedLinksFromHtml(
+            eventDocument,
+            eventPage,
+          ).where((candidate) => _looksLikeEventFeedUri(candidate.url));
+          if (eventCandidates.isEmpty) continue;
+          final eventFeed = eventCandidates.first;
+          candidates.insert(0, eventFeed);
+          _appendLog(
+            category: 'http',
+            message: 'Found an event feed through a calendar index page.',
+            details:
+                'Page: $sourceUrl\n'
+                'Calendar: $eventPage\n'
+                'Feed: ${eventFeed.url}',
+          );
+          break;
+        } on Object catch (error, stackTrace) {
+          _appendLog(
+            level: 'warning',
+            category: 'http',
+            message: 'Could not inspect a linked calendar index page.',
+            details:
+                'Page: $eventPage\n'
+                '${error.runtimeType}: $error\n$stackTrace',
+          );
+        }
+      }
+    }
+    for (final candidate in candidates) {
+      final discovered = candidate.url;
+      _appendLog(
+        category: 'http',
+        message: 'Discovered a feed in HTML metadata.',
+        details: 'Page: $sourceUrl\nFeed: $discovered',
+      );
+      final response = await _getFeedUrl(discovered);
+      _ensureSuccess(response);
+      final kind = _looksLikeIcs(response) ? FeedKind.ics : FeedKind.rss;
+      if (kind == FeedKind.rss && !_looksLikeXmlFeed(response)) {
+        throw const FormatException('The discovered link is not a feed.');
+      }
+      final body = _decodeFeedResponse(response);
+      return _FetchedFeed(
+        body: body,
+        url: discovered.toString(),
+        kind: kind,
+        discoveredTitle:
+            candidate.title ??
+            (kind == FeedKind.ics ? _icsCalendarName(body) : null),
+      );
+    }
+    throw const FormatException(
+      'No RSS, Atom, or iCalendar feed was found on that page.',
+    );
+  }
+
+  static List<_DiscoveredFeedLink> _feedLinksFromHtml(
+    html_dom.Document document,
+    Uri pageUri,
+  ) {
     final pagePath = '${pageUri.path.replaceFirst(RegExp(r'/*$'), '')}/';
-    final candidates = <({int priority, Uri url, String? title})>[];
+    final candidates = <_DiscoveredFeedLink>[];
     for (final link in document.querySelectorAll('link[href]')) {
       final relationships =
           link.attributes['rel']?.toLowerCase().split(RegExp(r'\s+')).toSet() ??
@@ -1221,36 +1330,165 @@ class PlannerStore extends ChangeNotifier {
           : searchable.contains('event') || searchable.contains('calendar')
           ? 2
           : 5;
-      candidates.add((priority: priority, url: discovered, title: title));
+      candidates.add(
+        _DiscoveredFeedLink(priority: priority, url: discovered, title: title),
+      );
+    }
+    for (final anchor in document.querySelectorAll('a[href]')) {
+      final href = anchor.attributes['href']?.trim();
+      if (href == null || href.isEmpty) continue;
+      final parsed = Uri.tryParse(href);
+      final isWebcal = parsed?.scheme.toLowerCase() == 'webcal';
+      final discovered = isWebcal
+          ? parsed!.replace(scheme: 'https')
+          : pageUri.resolve(href);
+      if (!discovered.hasAuthority ||
+          (discovered.scheme != 'http' && discovered.scheme != 'https') ||
+          !discovered.path.toLowerCase().endsWith('.ics')) {
+        continue;
+      }
+      final titleAttribute = anchor.attributes['title']?.trim();
+      candidates.add(
+        _DiscoveredFeedLink(
+          priority: 0,
+          url: discovered,
+          title: titleAttribute == null || titleAttribute.isEmpty
+              ? null
+              : titleAttribute,
+        ),
+      );
     }
     candidates.sort((a, b) => a.priority.compareTo(b.priority));
-    for (final candidate in candidates) {
-      final discovered = candidate.url;
+    return candidates;
+  }
+
+  Future<_DiscoveredFeedLink?> _companionCalendarFromXml(
+    String source, {
+    required Uri feedUri,
+  }) async {
+    try {
+      final document = XmlDocument.parse(source);
+      final channel = document.descendants.whereType<XmlElement>().firstWhere(
+        (element) => element.name.local.toLowerCase() == 'channel',
+      );
+      final title = channel.childElements
+          .where((element) => element.name.local.toLowerCase() == 'title')
+          .map((element) => element.innerText.trim())
+          .where((value) => value.isNotEmpty)
+          .firstOrNull;
+      final hint = '${feedUri.path} ${title ?? ''}';
+      if (!RegExp(
+        r'upcoming[_ -]?events|prossimi eventi',
+        caseSensitive: false,
+      ).hasMatch(hint)) {
+        return null;
+      }
+      final pageUrl = channel.childElements
+          .where((element) => element.name.local.toLowerCase() == 'link')
+          .map((element) => element.innerText.trim())
+          .map(Uri.tryParse)
+          .whereType<Uri>()
+          .where(
+            (uri) =>
+                uri.hasAuthority &&
+                (uri.scheme == 'http' || uri.scheme == 'https'),
+          )
+          .firstOrNull;
+      if (pageUrl == null) return null;
+      final pageResponse = await _getFeedUrl(pageUrl, rawHtml: true);
+      _ensureSuccess(pageResponse);
+      final candidates = _feedLinksFromHtml(
+        html_parser.parse(_decodeFeedResponse(pageResponse)),
+        pageUrl,
+      ).where((candidate) => candidate.url.path.toLowerCase().endsWith('.ics'));
+      if (candidates.isEmpty) return null;
+      final companion = candidates.first;
       _appendLog(
         category: 'http',
-        message: 'Discovered a feed in HTML metadata.',
-        details: 'Page: $sourceUrl\nFeed: $discovered',
+        message: 'Preferred an exact companion calendar over summary RSS.',
+        details:
+            'RSS: $feedUri\n'
+            'Page: $pageUrl\n'
+            'Calendar: ${companion.url}',
       );
-      final response = await _getFeedUrl(discovered);
-      _ensureSuccess(response);
-      final kind = _looksLikeIcs(response) ? FeedKind.ics : FeedKind.rss;
-      if (kind == FeedKind.rss && !_looksLikeXmlFeed(response)) {
-        throw const FormatException('The discovered link is not a feed.');
-      }
-      final body = _decodeFeedResponse(response);
-      return _FetchedFeed(
-        body: body,
-        url: discovered.toString(),
-        kind: kind,
-        discoveredTitle:
-            candidate.title ??
-            (kind == FeedKind.ics ? _icsCalendarName(body) : null),
+      return companion;
+    } on StateError {
+      return null;
+    } on XmlParserException {
+      return null;
+    } on Object catch (error, stackTrace) {
+      _appendLog(
+        level: 'warning',
+        category: 'http',
+        message: 'Could not inspect an RSS feed for a companion calendar.',
+        details: '${error.runtimeType}: $error\n$stackTrace',
       );
+      return null;
     }
-    throw const FormatException(
-      'No RSS, Atom, or iCalendar feed was found on that page.',
-    );
   }
+
+  static bool _looksLikeRunSummaryXml(String source) => RegExp(
+    r'\bfino\s+a\b|\buntil\b|\bthrough\b',
+    caseSensitive: false,
+  ).hasMatch(source);
+
+  static List<Uri> _eventPageLinksFromHtml(
+    html_dom.Document document,
+    Uri pageUri,
+  ) {
+    const exactLabels = {
+      'agenda',
+      'calendar',
+      'calendario',
+      'eventi',
+      'events',
+      'programma',
+    };
+    final priorities = <Uri, int>{};
+    for (final anchor in document.querySelectorAll('a[href]')) {
+      final href = anchor.attributes['href'];
+      if (href == null || href.trim().isEmpty) continue;
+      final resolved = pageUri.resolve(href.trim());
+      if ((resolved.scheme != 'http' && resolved.scheme != 'https') ||
+          resolved.host.toLowerCase() != pageUri.host.toLowerCase()) {
+        continue;
+      }
+      final path = resolved.path.toLowerCase();
+      final label = anchor.text.trim().toLowerCase();
+      final searchable = '${Uri.decodeComponent(path)} $label';
+      if (path.contains('/evento/') &&
+          !path.contains('event_listing_category')) {
+        continue;
+      }
+      final priority = path.contains('event_listing_category/eventi')
+          ? 0
+          : exactLabels.contains(label)
+          ? 1
+          : RegExp(
+              r'/agenda(?:/|$)|/calendar(?:/|$)|/eventi(?:/|$)|'
+              r'/events(?:/|$)',
+            ).hasMatch(searchable)
+          ? 2
+          : null;
+      if (priority == null ||
+          resolved.path.replaceFirst(RegExp(r'/*$'), '') ==
+              pageUri.path.replaceFirst(RegExp(r'/*$'), '')) {
+        continue;
+      }
+      final previous = priorities[resolved];
+      if (previous == null || priority < previous) {
+        priorities[resolved] = priority;
+      }
+    }
+    final links = priorities.keys.toList()
+      ..sort((a, b) => priorities[a]!.compareTo(priorities[b]!));
+    return links.take(3).toList();
+  }
+
+  static bool _looksLikeEventFeedUri(Uri uri) => RegExp(
+    r'event|calendar|agenda|ical|\.ics',
+    caseSensitive: false,
+  ).hasMatch('${uri.path} ${uri.query}');
 
   Future<http.Response> _getFeedUrl(Uri target, {bool rawHtml = false}) async {
     final requestUri = kIsWeb

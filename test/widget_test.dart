@@ -632,6 +632,210 @@ END:VCALENDAR
   });
 
   test(
+    'HTML discovery follows a calendar index to the Magnolia event feed',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final requests = <Uri>[];
+      final client = MockClient((request) async {
+        requests.add(request.url);
+        switch (request.url.path) {
+          case '/':
+            return http.Response(
+              '''
+<!doctype html>
+<link rel="alternate" type="application/rss+xml"
+      title="News" href="/feed/">
+<a href="/event_listing_category/eventi/">Calendario</a>
+''',
+              200,
+              headers: {'content-type': 'text/html; charset=utf-8'},
+            );
+          case '/event_listing_category/eventi/':
+            return http.Response(
+              '''
+<!doctype html>
+<link rel="alternate" type="application/rss+xml"
+      title="News" href="/feed/">
+<link rel="alternate" type="application/rss+xml"
+      title="Eventi" href="/event_listing_category/eventi/feed/">
+''',
+              200,
+              headers: {'content-type': 'text/html; charset=utf-8'},
+            );
+          case '/event_listing_category/eventi/feed/':
+            return http.Response(
+              '''
+<rss version="2.0">
+  <channel>
+    <title>Circolo Magnolia Eventi</title>
+    <item>
+      <guid>bunny-club</guid>
+      <title>BUNNY CLUB</title>
+      <link>https://www.circolomagnolia.it/evento/bunny-club/</link>
+      <pubDate>Thu, 23 Jul 2026 13:05:42 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
+''',
+              200,
+              headers: {'content-type': 'application/rss+xml; charset=utf-8'},
+            );
+          case '/evento/bunny-club/':
+            return http.Response(
+              '''
+<!doctype html>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Event",
+ "name":"Bunny Club","startDate":"2026-09-05 23:00:00",
+ "location":{"@type":"Place","name":"Circolo Magnolia"}}
+</script>
+''',
+              200,
+              headers: {'content-type': 'text/html; charset=utf-8'},
+            );
+          default:
+            return http.Response('Not found', 404);
+        }
+      });
+      final store = await PlannerStore.load(httpClient: client);
+      await store.addFeed('https://www.circolomagnolia.it/');
+
+      final result = await store.refreshFeedsIfDue(maxAge: Duration.zero);
+
+      expect(result.added, 1);
+      expect(store.feeds.single.url, contains('/eventi/feed/'));
+      expect(store.inbox.single.title, 'Bunny club');
+      expect(store.inbox.single.eventDate, DateTime(2026, 9, 5, 23));
+      expect(store.inbox.single.locationName, 'Circolo Magnolia');
+      expect(requests.map((uri) => uri.path), [
+        '/',
+        '/event_listing_category/eventi/',
+        '/event_listing_category/eventi/feed/',
+        '/evento/bunny-club/',
+      ]);
+    },
+  );
+
+  test('summary RSS prefers its exact companion screening calendar', () async {
+    SharedPreferences.setMockInitialValues({});
+    final requests = <Uri>[];
+    final client = MockClient((request) async {
+      requests.add(request.url);
+      switch (request.url.path) {
+        case '/bah/beltrade/upcoming_events':
+          return http.Response(
+            '''
+<rss version="2.0">
+  <channel>
+    <title>Cinema Beltrade Prossimi eventi</title>
+    <link>https://bandhi.it/bah/beltrade</link>
+    <item>
+      <title>OBSESSION</title>
+      <description>Fino a 28 Luglio 2026.</description>
+    </item>
+  </channel>
+</rss>
+''',
+            200,
+            headers: {'content-type': 'text/xml; charset=utf-8'},
+          );
+        case '/bah/beltrade':
+          return http.Response(
+            '''
+<!doctype html>
+<a href="webcal://bandhi.it/bah/beltrade/wp-content/uploads/sites/2/beltrade.ics">
+  iCal
+</a>
+''',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          );
+        case '/bah/beltrade/wp-content/uploads/sites/2/beltrade.ics':
+          return http.Response(
+            '''
+BEGIN:VCALENDAR
+VERSION:2.0
+X-WR-CALNAME:Cinema Beltrade
+X-WR-TIMEZONE:Europe/Rome
+BEGIN:VEVENT
+UID:screening-33837
+DTSTART;TZID=Europe/Rome:20260726T104000
+SUMMARY:OBSESSION
+LOCATION:Cinema Beltrade\\nVia Nino Oxilia 10, Milano
+URL:https://bandhi.it/bah/beltrade/production/obsession/
+END:VEVENT
+END:VCALENDAR
+''',
+            200,
+            headers: {'content-type': 'text/calendar'},
+          );
+        default:
+          return http.Response('Not found', 404);
+      }
+    });
+    final store = await PlannerStore.load(httpClient: client);
+    await store.addFeed('https://bandhi.it/bah/beltrade/upcoming_events');
+
+    final result = await store.refreshFeedsIfDue(maxAge: Duration.zero);
+
+    expect(result.added, 1);
+    expect(store.feeds.single.kind, FeedKind.ics);
+    expect(store.feeds.single.name, 'Cinema Beltrade');
+    expect(store.feeds.single.url, endsWith('/beltrade.ics'));
+    expect(store.inbox.single.title, 'Obsession');
+    expect(store.inbox.single.eventDate, DateTime(2026, 7, 26, 10, 40));
+    expect(
+      store.inbox.single.locationName,
+      'Cinema Beltrade\nVia Nino Oxilia 10, Milano',
+    );
+    expect(requests.map((uri) => uri.path), [
+      '/bah/beltrade/upcoming_events',
+      '/bah/beltrade',
+      '/bah/beltrade/wp-content/uploads/sites/2/beltrade.ics',
+    ]);
+  });
+
+  test(
+    'run-window RSS is rejected when no exact calendar is available',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final client = MockClient((request) async {
+        if (request.url.path == '/upcoming_events') {
+          return http.Response(
+            '''
+<rss version="2.0">
+  <channel>
+    <title>Cinema Prossimi eventi</title>
+    <link>https://example.com/cinema</link>
+    <item>
+      <title>A film</title>
+      <description>Fino a 28 Luglio 2026.</description>
+    </item>
+  </channel>
+</rss>
+''',
+            200,
+            headers: {'content-type': 'text/xml; charset=utf-8'},
+          );
+        }
+        return http.Response(
+          '<!doctype html><title>Cinema</title>',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      });
+      final store = await PlannerStore.load(httpClient: client);
+      await store.addFeed('https://example.com/upcoming_events');
+
+      final result = await store.refreshFeedsIfDue(maxAge: Duration.zero);
+
+      expect(result.errors, hasLength(1));
+      expect(result.errors.single, contains('run windows'));
+      expect(store.inbox, isEmpty);
+    },
+  );
+
+  test(
     'RSS refresh removes a previously stored entry if its date is unknown',
     () async {
       SharedPreferences.setMockInitialValues({});

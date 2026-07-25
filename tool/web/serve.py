@@ -41,9 +41,19 @@ class FeedLinkParser(HTMLParser):
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
     ) -> None:
+        values = {key.lower(): value for key, value in attrs}
+        if tag.lower() == "a":
+            href = values.get("href")
+            if href:
+                parsed = urllib.parse.urlsplit(href)
+                if (
+                    parsed.scheme == "webcal"
+                    or parsed.path.lower().endswith(".ics")
+                ):
+                    self.links.append((href, values.get("title"), "text/calendar"))
+            return
         if tag.lower() != "link":
             return
-        values = {key.lower(): value for key, value in attrs}
         relationships = set((values.get("rel") or "").lower().split())
         media_type = (values.get("type") or "").lower()
         href = values.get("href")
@@ -61,6 +71,34 @@ class FeedLinkParser(HTMLParser):
             title = values.get("title")
             if "oembed" not in href.lower() and "oembed" not in (title or "").lower():
                 self.links.append((href, title, media_type))
+
+
+class EventPageLinkParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag.lower() != "a" or self._href is not None:
+            return
+        values = {key.lower(): value for key, value in attrs}
+        self._href = values.get("href")
+        self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or self._href is None:
+            return
+        self.links.append((self._href, " ".join(self._text)))
+        self._href = None
+        self._text = []
 
 
 def validate_public_url(url: str) -> urllib.parse.SplitResult:
@@ -135,11 +173,14 @@ def discover_feed(
         return None, None
     page_path = urllib.parse.urlsplit(page_url).path.rstrip("/") + "/"
 
+    def resolve(href: str) -> str:
+        if urllib.parse.urlsplit(href).scheme == "webcal":
+            return "https://" + href.removeprefix("webcal://")
+        return urllib.parse.urljoin(page_url, href)
+
     def priority(link: tuple[str, str | None, str]) -> tuple[int, int]:
         href, title, media_type = link
-        resolved_path = urllib.parse.urlsplit(
-            urllib.parse.urljoin(page_url, href)
-        ).path.lower()
+        resolved_path = urllib.parse.urlsplit(resolve(href)).path.lower()
         searchable = f"{href} {title or ''}".lower()
         if "calendar" in media_type or "ics" in media_type:
             return 0, len(resolved_path)
@@ -152,7 +193,54 @@ def discover_feed(
         return 5, len(resolved_path)
 
     href, title, _ = min(parser.links, key=priority)
-    return urllib.parse.urljoin(page_url, href), title
+    return resolve(href), title
+
+
+def looks_like_event_feed(url: str) -> bool:
+    parsed = urllib.parse.urlsplit(url)
+    searchable = f"{parsed.path} {parsed.query}".lower()
+    return any(
+        word in searchable
+        for word in ("event", "calendar", "agenda", "ical", ".ics")
+    )
+
+
+def discover_event_page(body: bytes, page_url: str) -> str | None:
+    parser = EventPageLinkParser()
+    parser.feed(body.decode("utf-8", errors="replace"))
+    current = urllib.parse.urlsplit(page_url)
+    candidates: list[tuple[int, str]] = []
+    for href, label in parser.links:
+        resolved = urllib.parse.urljoin(page_url, href)
+        parsed = urllib.parse.urlsplit(resolved)
+        if parsed.scheme not in {"http", "https"} or parsed.netloc != current.netloc:
+            continue
+        path = parsed.path.lower()
+        searchable = f"{urllib.parse.unquote(path)} {label}".lower()
+        if "/evento/" in path and "event_listing_category" not in path:
+            continue
+        if "event_listing_category/eventi" in path:
+            priority = 0
+        elif label.strip().lower() in {
+            "agenda",
+            "calendar",
+            "calendario",
+            "eventi",
+            "events",
+            "programma",
+        }:
+            priority = 1
+        elif any(
+            word in searchable
+            for word in ("/agenda", "/calendar", "/eventi", "/events")
+        ):
+            priority = 2
+        else:
+            continue
+        if parsed.path.rstrip("/") == current.path.rstrip("/"):
+            continue
+        candidates.append((priority, resolved))
+    return min(candidates)[1] if candidates else None
 
 
 class WeekendPlannerHandler(http.server.SimpleHTTPRequestHandler):
@@ -187,6 +275,20 @@ class WeekendPlannerHandler(http.server.SimpleHTTPRequestHandler):
             discovered_title = None
             if looks_like_html(body, content_type):
                 discovered_url, discovered_title = discover_feed(body, final_url)
+                if discovered_url and not looks_like_event_feed(discovered_url):
+                    event_page = discover_event_page(body, final_url)
+                    if event_page:
+                        try:
+                            event_body, event_url, event_type = fetch(event_page)
+                            if looks_like_html(event_body, event_type):
+                                event_feed, event_title = discover_feed(
+                                    event_body, event_url
+                                )
+                                if event_feed and looks_like_event_feed(event_feed):
+                                    discovered_url = event_feed
+                                    discovered_title = event_title
+                        except (OSError, ValueError, urllib.error.URLError):
+                            pass
                 if not discovered_url:
                     raise ValueError(
                         "No RSS, Atom, or iCalendar feed was found in the "
