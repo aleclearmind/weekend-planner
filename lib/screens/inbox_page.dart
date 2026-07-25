@@ -6,6 +6,7 @@ import '../planner_store.dart';
 import '../widgets.dart';
 import 'activity_form_page.dart';
 import 'feed_manager_page.dart';
+import 'feed_entry_detail_page.dart';
 
 class InboxPage extends StatefulWidget {
   const InboxPage({required this.store, super.key});
@@ -127,6 +128,7 @@ class _InboxPageState extends State<InboxPage> {
                             _WeekHeading(week: week, first: index == 0),
                           _InboxCard(
                             item: item,
+                            onOpen: () => _openEntry(context, item),
                             onImport: item.imported
                                 ? null
                                 : () => _import(context, item),
@@ -156,6 +158,16 @@ class _InboxPageState extends State<InboxPage> {
     );
   }
 
+  Future<void> _openEntry(BuildContext context, RssInboxItem item) async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            FeedEntryDetailPage(store: widget.store, itemId: item.id),
+      ),
+    );
+  }
+
   Future<void> _openFeeds(BuildContext context) async {
     await Navigator.push<void>(
       context,
@@ -168,6 +180,9 @@ class _InboxPageState extends State<InboxPage> {
     if (!context.mounted) return;
     final message = result.errors.isNotEmpty
         ? result.errors.join('\n')
+        : result.skipped > 0
+        ? '${result.added == 0 ? 'No dated events found.' : '${result.added} new ${result.added == 1 ? 'entry' : 'entries'} added.'} '
+              '${result.skipped} ${result.skipped == 1 ? 'entry was' : 'entries were'} skipped because no event date could be found.'
         : result.added == 0
         ? 'Feeds are up to date.'
         : '${result.added} new '
@@ -185,71 +200,77 @@ class _InboxPageState extends State<InboxPage> {
 class _InboxCard extends StatelessWidget {
   const _InboxCard({
     required this.item,
+    required this.onOpen,
     required this.onImport,
     required this.onDismiss,
   });
 
   final RssInboxItem item;
+  final VoidCallback onOpen;
   final VoidCallback? onImport;
   final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) => Card(
     margin: EdgeInsets.zero,
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            normalizeAllCapsTitle(item.title),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 2),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '${item.source} · ${isoDate(item.eventDate)} · '
-                  '${item.startPart.name}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-              if (item.imported)
-                const Padding(
-                  padding: EdgeInsets.only(left: 8, right: 5),
-                  child: Icon(
-                    Icons.check_circle_rounded,
-                    size: 18,
-                    color: AppColors.primary,
+    child: InkWell(
+      onTap: onOpen,
+      borderRadius: BorderRadius.circular(18),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              normalizeAllCapsTitle(item.title),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 2),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${item.source} · ${isoDate(item.eventDate)} · '
+                    '${item.startPart.name}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                )
-              else ...[
-                const SizedBox(width: 4),
-                IconButton(
-                  onPressed: onDismiss,
-                  tooltip: 'Dismiss',
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.close_rounded, size: 19),
                 ),
-                FilledButton.tonalIcon(
-                  onPressed: onImport,
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(0, 36),
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                if (item.imported)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 8, right: 5),
+                    child: Icon(
+                      Icons.check_circle_rounded,
+                      size: 18,
+                      color: AppColors.primary,
+                    ),
+                  )
+                else ...[
+                  const SizedBox(width: 4),
+                  IconButton(
+                    onPressed: onDismiss,
+                    tooltip: 'Dismiss',
                     visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.close_rounded, size: 19),
                   ),
-                  icon: const Icon(Icons.add_rounded, size: 18),
-                  label: const Text('Import'),
-                ),
+                  FilledButton.tonalIcon(
+                    onPressed: onImport,
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 36),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('Import'),
+                  ),
+                ],
               ],
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     ),
   );

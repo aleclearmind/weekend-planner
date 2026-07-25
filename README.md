@@ -39,10 +39,15 @@ Claude Design mockup and runs on Android and the web.
   activities. HTML autodiscovery also recognizes linked calendar feeds.
 - Normalizes all-caps RSS titles, carries the entry URL into the activity,
   opens the editor immediately after import, and filters the inbox by source.
-  The compact inbox groups entries by week and decodes feed bytes according to
-  their declared encoding.
+  Inbox entries open into a read-only detail view. The compact inbox groups
+  entries by week and decodes feed bytes according to their declared encoding.
+- Infers RSS event dates from explicit event fields, dates written in the
+  title/body, or structured `Event.startDate` data on the linked page. RSS
+  publication dates are never treated as event dates, and entries without a
+  credible event date are excluded and recorded in the event log.
 - Discovers feeds automatically when a normal HTML page contains a standard
-  `<link rel="alternate">` for RSS, Atom, or iCalendar.
+  `<link rel="alternate">` for RSS, Atom, or iCalendar, preferring event
+  calendars and page-specific event feeds over generic news feeds.
 - Checks stale feeds every 30 minutes while the app is active and whenever the
   app resumes, while keeping manual refresh available.
 - Persists activities, assignments, people, feeds, the inbox, settings, and a

@@ -160,6 +160,13 @@ void main() {
     expect(find.text('Import as activity'), findsNothing);
     expect(find.text('Import'), findsNWidgets(3));
     expect(find.text('Insieme è più bello'), findsOneWidget);
+    await tester.tap(find.text('Insieme è più bello'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Feed entry'), findsOneWidget);
+    expect(find.text('Date used for planning'), findsOneWidget);
+    expect(find.text('Source page'), findsOneWidget);
+    expect(find.text('Import as activity'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -441,6 +448,185 @@ END:VCALENDAR
     expect(activity.location?.name, 'Community Hall');
     expect(activity.url, 'https://example.com/concert');
   });
+
+  test('RSS infers credible event dates and excludes unknown dates', () async {
+    SharedPreferences.setMockInitialValues({});
+    final requests = <Uri>[];
+    final client = MockClient((request) async {
+      requests.add(request.url);
+      if (request.url.path == '/events.xml') {
+        return http.Response(
+          '''
+<rss version="2.0">
+  <channel>
+    <item>
+      <guid>written</guid>
+      <title>Festival 5 settembre 2026 ore 23:00</title>
+      <link>https://example.com/written</link>
+      <pubDate>Thu, 23 Jul 2026 13:05:42 +0000</pubDate>
+    </item>
+    <item>
+      <guid>structured</guid>
+      <title>A concert with a structured page</title>
+      <link>https://example.com/structured</link>
+      <pubDate>Thu, 23 Jul 2026 13:05:42 +0000</pubDate>
+    </item>
+    <item>
+      <guid>unknown</guid>
+      <title>A post without an event date</title>
+      <link>https://example.com/unknown</link>
+      <pubDate>Thu, 23 Jul 2026 13:05:42 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
+''',
+          200,
+          headers: {'content-type': 'application/rss+xml; charset=utf-8'},
+        );
+      }
+      if (request.url.path == '/structured') {
+        return http.Response(
+          '''
+<!doctype html>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Event",
+ "name":"A concert","startDate":"2026-09-13 17:30:00"}
+</script>
+''',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }
+      return http.Response(
+        '''
+<!doctype html>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Article",
+ "datePublished":"2026-07-23T13:05:42Z"}
+</script>
+''',
+        200,
+        headers: {'content-type': 'text/html; charset=utf-8'},
+      );
+    });
+    final store = await PlannerStore.load(httpClient: client);
+    await store.addFeed('https://example.com/events.xml');
+
+    final result = await store.refreshFeedsIfDue(maxAge: Duration.zero);
+
+    expect(result.checked, 1);
+    expect(result.added, 2);
+    expect(result.skipped, 1);
+    expect(store.inbox, hasLength(2));
+    expect(
+      store.inbox.map((item) => item.eventDate),
+      containsAll([DateTime(2026, 9, 5, 23), DateTime(2026, 9, 13, 17, 30)]),
+    );
+    expect(
+      requests.map((uri) => uri.path),
+      containsAll(['/events.xml', '/structured', '/unknown']),
+    );
+    expect(
+      store.eventLog.any(
+        (entry) =>
+            entry.message ==
+            'Skipped an RSS entry with no credible event date.',
+      ),
+      isTrue,
+    );
+  });
+
+  test('HTML discovery prefers an event calendar over generic RSS', () async {
+    SharedPreferences.setMockInitialValues({});
+    final requests = <Uri>[];
+    final client = MockClient((request) async {
+      requests.add(request.url);
+      if (request.url.path == '/') {
+        return http.Response(
+          '''
+<!doctype html>
+<link rel="alternate" type="application/rss+xml"
+      title="News" href="/feed/">
+<link rel="alternate" type="text/calendar"
+      title="Events" href="/events.ics">
+''',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      }
+      return http.Response(
+        '''
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:event-1
+DTSTART:20260905T230000
+SUMMARY:Calendar event
+END:VEVENT
+END:VCALENDAR
+''',
+        200,
+        headers: {'content-type': 'text/calendar; charset=utf-8'},
+      );
+    });
+    final store = await PlannerStore.load(httpClient: client);
+    await store.addFeed('https://example.com/');
+
+    final result = await store.refreshFeedsIfDue(maxAge: Duration.zero);
+
+    expect(result.added, 1);
+    expect(store.feeds.single.kind, FeedKind.ics);
+    expect(store.feeds.single.url, 'https://example.com/events.ics');
+    expect(requests.map((uri) => uri.path), ['/', '/events.ics']);
+  });
+
+  test(
+    'RSS refresh removes a previously stored entry if its date is unknown',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      var includesDate = true;
+      final client = MockClient((request) async {
+        if (request.url.path == '/events.xml') {
+          return http.Response(
+            '''
+<rss version="2.0">
+  <channel>
+    <item>
+      <guid>changing-event</guid>
+      <title>${includesDate ? 'Concert 5 settembre 2026' : 'Concert'}</title>
+      <link>https://example.com/concert</link>
+      <pubDate>Thu, 23 Jul 2026 13:05:42 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
+''',
+            200,
+            headers: {'content-type': 'application/rss+xml; charset=utf-8'},
+          );
+        }
+        return http.Response(
+          '''
+<!doctype html>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Article",
+ "datePublished":"2026-07-23T13:05:42Z"}
+</script>
+''',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      });
+      final store = await PlannerStore.load(httpClient: client);
+      await store.addFeed('https://example.com/events.xml');
+      await store.refreshFeedsIfDue(maxAge: Duration.zero);
+      expect(store.inbox, hasLength(1));
+
+      includesDate = false;
+      await store.refreshFeedsIfDue(maxAge: Duration.zero);
+
+      expect(store.inbox, isEmpty);
+    },
+  );
 
   testWidgets('people can be added directly from the People tab', (
     tester,

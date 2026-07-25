@@ -153,7 +153,10 @@ class _FeedManagerPageState extends State<FeedManagerPage> {
       _showMessage(result.errors.join('\n'));
     } else {
       _showMessage(
-        result.added == 0
+        result.skipped > 0
+            ? '${result.added == 0 ? 'No dated events found.' : '${result.added} new ${result.added == 1 ? 'entry' : 'entries'} added.'} '
+                  '${result.skipped} ${result.skipped == 1 ? 'entry was' : 'entries were'} skipped because no event date could be found.'
+            : result.added == 0
             ? 'Feeds are up to date.'
             : '${result.added} new '
                   '${result.added == 1 ? 'entry' : 'entries'} added.',

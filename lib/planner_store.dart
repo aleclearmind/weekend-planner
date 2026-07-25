@@ -15,11 +15,13 @@ class FeedRefreshResult {
     required this.added,
     required this.checked,
     required this.errors,
+    this.skipped = 0,
   });
 
   final int added;
   final int checked;
   final List<String> errors;
+  final int skipped;
 }
 
 class _FetchedFeed {
@@ -67,6 +69,7 @@ class PlannerStore extends ChangeNotifier {
   bool isRefreshingFeeds = false;
   bool isRefreshingCalendar = false;
   final Map<String, String> _calendarSlotTitles = {};
+  final Map<String, DateTime?> _linkedPageEventDates = {};
 
   static Future<PlannerStore> load({http.Client? httpClient}) async {
     final preferences = await SharedPreferences.getInstance();
@@ -513,6 +516,7 @@ class PlannerStore extends ChangeNotifier {
     notifyListeners();
     var added = 0;
     var checked = 0;
+    var skipped = 0;
     final errors = <String>[];
     try {
       for (final feed in selected) {
@@ -524,15 +528,33 @@ class PlannerStore extends ChangeNotifier {
             name: fetched.discoveredTitle,
             lastChecked: DateTime.now(),
           );
+          final skippedRssIds = <String>{};
           final parsed = switch (fetched.kind) {
-            FeedKind.rss => _parseXmlFeed(refreshedFeed, fetched.body),
+            FeedKind.rss => await _parseXmlFeed(
+              refreshedFeed,
+              fetched.body,
+              skippedIds: skippedRssIds,
+            ),
             FeedKind.ics => _parseIcsFeed(refreshedFeed, fetched.body),
           };
-          final knownIds = inbox.map((item) => item.id).toSet();
+          if (skippedRssIds.isNotEmpty) {
+            skipped += skippedRssIds.length;
+            inbox.removeWhere(
+              (item) =>
+                  item.feedId == feed.id && skippedRssIds.contains(item.id),
+            );
+          }
           for (final item in parsed) {
-            if (knownIds.add(item.id)) {
+            final existingIndex = inbox.indexWhere(
+              (candidate) => candidate.id == item.id,
+            );
+            if (existingIndex == -1) {
               inbox.add(item);
               added++;
+            } else {
+              inbox[existingIndex] = item.copyWith(
+                imported: inbox[existingIndex].imported,
+              );
             }
           }
           final index = feeds.indexWhere((item) => item.id == feed.id);
@@ -565,7 +587,12 @@ class PlannerStore extends ChangeNotifier {
       isRefreshingFeeds = false;
       _changed();
     }
-    return FeedRefreshResult(added: added, checked: checked, errors: errors);
+    return FeedRefreshResult(
+      added: added,
+      checked: checked,
+      errors: errors,
+      skipped: skipped,
+    );
   }
 
   ActivityIdea importInboxItem(RssInboxItem item) {
@@ -630,6 +657,7 @@ class PlannerStore extends ChangeNotifier {
     }
     var added = 0;
     var checked = 0;
+    var skipped = 0;
     final errors = <String>[];
     for (final id in due) {
       final result = await refreshFeeds(
@@ -638,9 +666,15 @@ class PlannerStore extends ChangeNotifier {
       );
       added += result.added;
       checked += result.checked;
+      skipped += result.skipped;
       errors.addAll(result.errors);
     }
-    return FeedRefreshResult(added: added, checked: checked, errors: errors);
+    return FeedRefreshResult(
+      added: added,
+      checked: checked,
+      errors: errors,
+      skipped: skipped,
+    );
   }
 
   String? calendarEventAt(DateTime weekStart, int slotIndex) =>
@@ -976,7 +1010,11 @@ class PlannerStore extends ChangeNotifier {
     return true;
   }
 
-  List<RssInboxItem> _parseXmlFeed(RssFeed feed, String source) {
+  Future<List<RssInboxItem>> _parseXmlFeed(
+    RssFeed feed,
+    String source, {
+    required Set<String> skippedIds,
+  }) async {
     final document = XmlDocument.parse(source);
     final nodes = document.descendants
         .whereType<XmlElement>()
@@ -984,12 +1022,20 @@ class PlannerStore extends ChangeNotifier {
           (element) =>
               element.name.local == 'item' || element.name.local == 'entry',
         )
-        .take(100);
-    return [
-      for (final node in nodes)
-        if (_textOf(node, 'title').trim().isNotEmpty)
-          _inboxItemFromNode(feed, node),
-    ];
+        .where((node) => _textOf(node, 'title').trim().isNotEmpty)
+        .take(100)
+        .toList();
+    final items = <RssInboxItem>[];
+    const batchSize = 4;
+    for (var offset = 0; offset < nodes.length; offset += batchSize) {
+      final end = (offset + batchSize).clamp(0, nodes.length);
+      final batch = await Future.wait([
+        for (final node in nodes.sublist(offset, end))
+          _inboxItemFromNode(feed, node, skippedIds: skippedIds),
+      ]);
+      items.addAll(batch.whereType<RssInboxItem>());
+    }
+    return items;
   }
 
   List<RssInboxItem> _parseIcsFeed(RssFeed feed, String source) {
@@ -1100,6 +1146,9 @@ class PlannerStore extends ChangeNotifier {
     }
 
     final document = html_parser.parse(_decodeFeedResponse(first));
+    final pageUri = Uri.parse(finalUrl ?? sourceUrl);
+    final pagePath = '${pageUri.path.replaceFirst(RegExp(r'/*$'), '')}/';
+    final candidates = <({int priority, Uri url, String? title})>[];
     for (final link in document.querySelectorAll('link[href]')) {
       final relationships =
           link.attributes['rel']?.toLowerCase().split(RegExp(r'\s+')).toSet() ??
@@ -1114,7 +1163,25 @@ class PlannerStore extends ChangeNotifier {
       if (!isFeed) continue;
       final href = link.attributes['href'];
       if (href == null || href.trim().isEmpty) continue;
-      final discovered = Uri.parse(finalUrl ?? sourceUrl).resolve(href.trim());
+      final title = link.attributes['title']?.trim();
+      final searchable = '$href ${title ?? ''}'.toLowerCase();
+      if (searchable.contains('oembed')) continue;
+      final discovered = pageUri.resolve(href.trim());
+      final priority = type.contains('calendar') || type.contains('ics')
+          ? 0
+          : searchable.contains('comment')
+          ? 9
+          : pagePath != '/' &&
+                discovered.path.toLowerCase().startsWith(pagePath.toLowerCase())
+          ? 1
+          : searchable.contains('event') || searchable.contains('calendar')
+          ? 2
+          : 5;
+      candidates.add((priority: priority, url: discovered, title: title));
+    }
+    candidates.sort((a, b) => a.priority.compareTo(b.priority));
+    for (final candidate in candidates) {
+      final discovered = candidate.url;
       _appendLog(
         category: 'http',
         message: 'Discovered a feed in HTML metadata.',
@@ -1132,7 +1199,7 @@ class PlannerStore extends ChangeNotifier {
         url: discovered.toString(),
         kind: kind,
         discoveredTitle:
-            link.attributes['title']?.trim() ??
+            candidate.title ??
             (kind == FeedKind.ics ? _icsCalendarName(body) : null),
       );
     }
@@ -1141,15 +1208,19 @@ class PlannerStore extends ChangeNotifier {
     );
   }
 
-  Future<http.Response> _getFeedUrl(Uri target) async {
+  Future<http.Response> _getFeedUrl(Uri target, {bool rawHtml = false}) async {
     final requestUri = kIsWeb
-        ? Uri(path: '/feed-proxy', queryParameters: {'url': target.toString()})
+        ? Uri(
+            path: rawHtml ? '/page-proxy' : '/feed-proxy',
+            queryParameters: {'url': target.toString()},
+          )
         : target;
     _appendLog(
       category: 'http',
       message: 'GET $target',
       details: kIsWeb
-          ? 'Transport: same-origin /feed-proxy\n'
+          ? 'Transport: same-origin '
+                '${rawHtml ? '/page-proxy' : '/feed-proxy'}\n'
                 'Accept: RSS, Atom, iCalendar, XML, HTML\nTimeout: 18 seconds'
           : 'Transport: direct\nAccept: RSS, Atom, iCalendar, XML, HTML\n'
                 'User-Agent: $_browserUserAgent\nTimeout: 18 seconds',
@@ -1315,23 +1386,26 @@ class PlannerStore extends ChangeNotifier {
     caseSensitive: false,
   ).firstMatch(value)?.group(0);
 
-  RssInboxItem _inboxItemFromNode(RssFeed feed, XmlElement node) {
+  Future<RssInboxItem?> _inboxItemFromNode(
+    RssFeed feed,
+    XmlElement node, {
+    required Set<String> skippedIds,
+  }) async {
     final rawTitle = _textOf(node, 'title').trim();
     final title = normalizeAllCapsTitle(rawTitle);
     final description = [
       _textOf(node, 'description'),
       _textOf(node, 'summary'),
       _textOf(node, 'content'),
+      _textOf(node, 'encoded'),
     ].join(' ');
-    final dateText = [
-      description,
-      rawTitle,
+    final publicationDate = _firstParsedFeedTimestamp([
       _textOf(node, 'pubDate'),
       _textOf(node, 'published'),
       _textOf(node, 'updated'),
       _textOf(node, 'date'),
-    ].join(' ');
-    final eventDate = _extractDate(dateText) ?? DateTime.now();
+    ]);
+    final declaredEventDate = _firstExplicitEventField(node);
     final guid = _textOf(node, 'guid').trim();
     var link = _textOf(node, 'link').trim();
     if (link.isEmpty) {
@@ -1344,8 +1418,32 @@ class PlannerStore extends ChangeNotifier {
       }
     }
     final stable = guid.isNotEmpty ? guid : '$rawTitle|$link';
+    final itemId = '${feed.id}-${_stableHash(stable)}';
+    var eventDate =
+        declaredEventDate ??
+        _extractWrittenEventDate([
+          rawTitle,
+          description,
+        ], reference: publicationDate);
+    if (eventDate == null && _isHttpUrl(link)) {
+      eventDate = await _eventDateFromLinkedPage(link);
+    }
+    if (eventDate == null) {
+      skippedIds.add(itemId);
+      _appendLog(
+        level: 'warning',
+        category: 'feed',
+        message: 'Skipped an RSS entry with no credible event date.',
+        details:
+            'Feed: ${feed.name}\n'
+            'Title: $rawTitle\n'
+            'Page: ${link.isEmpty ? '(none)' : link}\n'
+            'The RSS publication date was not used as the event date.',
+      );
+      return null;
+    }
     return RssInboxItem(
-      id: '${feed.id}-${_stableHash(stable)}',
+      id: itemId,
       feedId: feed.id,
       source: feed.name,
       title: title,
@@ -1354,6 +1452,356 @@ class PlannerStore extends ChangeNotifier {
       startPart: inferDayPart(eventDate),
       slotLength: 1,
     );
+  }
+
+  Future<DateTime?> _eventDateFromLinkedPage(String link) async {
+    if (_linkedPageEventDates.containsKey(link)) {
+      return _linkedPageEventDates[link];
+    }
+    DateTime? result;
+    try {
+      final response = await _getFeedUrl(Uri.parse(link), rawHtml: true);
+      _ensureSuccess(response);
+      result = _structuredEventDateFromHtml(_decodeFeedResponse(response));
+      _appendLog(
+        category: 'feed',
+        message: result == null
+            ? 'No structured event date found on an RSS entry page.'
+            : 'Found a structured event date on an RSS entry page.',
+        details:
+            'Page: $link\n'
+            'Result: ${result?.toIso8601String() ?? '(none)'}',
+      );
+    } on Object catch (error, stackTrace) {
+      _appendLog(
+        level: 'warning',
+        category: 'feed',
+        message: 'Could not inspect an RSS entry page for an event date.',
+        details:
+            'Page: $link\n'
+            '${error.runtimeType}: $error\n$stackTrace',
+      );
+    }
+    _linkedPageEventDates[link] = result;
+    return result;
+  }
+
+  static DateTime? _structuredEventDateFromHtml(String source) {
+    final document = html_parser.parse(source);
+    for (final script in document.querySelectorAll(
+      'script[type="application/ld+json"]',
+    )) {
+      try {
+        final decoded = jsonDecode(script.text);
+        for (final object in _jsonObjects(decoded)) {
+          if (!_isSchemaEvent(object['@type'])) continue;
+          final date = _parseStructuredDate(object['startDate']);
+          if (date != null) return date;
+        }
+      } on FormatException {
+        // A page can contain unrelated malformed JSON-LD blocks. Keep looking.
+      }
+    }
+    const selectors = [
+      '[itemprop="startDate"]',
+      'meta[property="event:start_time"]',
+      'meta[property="event:startDate"]',
+    ];
+    for (final selector in selectors) {
+      for (final element in document.querySelectorAll(selector)) {
+        final date = _parseStructuredDate(
+          element.attributes['content'] ??
+              element.attributes['datetime'] ??
+              element.text,
+        );
+        if (date != null) return date;
+      }
+    }
+    return null;
+  }
+
+  static Iterable<Map<String, dynamic>> _jsonObjects(Object? value) sync* {
+    if (value is Map) {
+      final object = value.map((key, item) => MapEntry(key.toString(), item));
+      yield object;
+      for (final item in object.values) {
+        yield* _jsonObjects(item);
+      }
+    } else if (value is List) {
+      for (final item in value) {
+        yield* _jsonObjects(item);
+      }
+    }
+  }
+
+  static bool _isSchemaEvent(Object? value) {
+    if (value is String) {
+      return value.toLowerCase().split('/').last == 'event';
+    }
+    return value is List && value.any(_isSchemaEvent);
+  }
+
+  static DateTime? _parseStructuredDate(Object? value) {
+    if (value is! String || value.trim().isEmpty) return null;
+    var normalized = value.trim();
+    final space = RegExp(r'^(\d{4}-\d{2}-\d{2})\s+').firstMatch(normalized);
+    if (space != null) {
+      normalized = '${space.group(1)}T${normalized.substring(space.end)}';
+    }
+    return DateTime.tryParse(normalized)?.toLocal();
+  }
+
+  static DateTime? _firstExplicitEventField(XmlElement node) {
+    const eventFieldNames = {
+      'dtstart',
+      'eventdate',
+      'eventstart',
+      'startdate',
+      'starttime',
+      'when',
+    };
+    for (final element in node.descendants.whereType<XmlElement>()) {
+      final name = element.name.local.toLowerCase().replaceAll(
+        RegExp(r'[-_]'),
+        '',
+      );
+      if (!eventFieldNames.contains(name)) continue;
+      for (final candidate in [
+        element.getAttribute('startTime'),
+        element.getAttribute('start'),
+        element.getAttribute('datetime'),
+        element.innerText,
+      ]) {
+        final parsed = _parseStructuredDate(candidate);
+        if (parsed != null) return parsed;
+      }
+    }
+    return null;
+  }
+
+  static DateTime? _firstParsedFeedTimestamp(Iterable<String> values) {
+    for (final value in values) {
+      final parsed = _parseFeedTimestamp(value);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  static DateTime? _parseFeedTimestamp(String input) {
+    final value = input.trim();
+    if (value.isEmpty) return null;
+    final iso = DateTime.tryParse(value);
+    if (iso != null) return iso.toLocal();
+    final match = RegExp(
+      r'^(?:[A-Za-z]{3},\s*)?(\d{1,2})\s+([A-Za-z]{3})\s+'
+      r'(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?\s+'
+      r'([+-])?(\d{2})?:?(\d{2})?',
+    ).firstMatch(value);
+    if (match == null) return null;
+    const months = {
+      'jan': 1,
+      'feb': 2,
+      'mar': 3,
+      'apr': 4,
+      'may': 5,
+      'jun': 6,
+      'jul': 7,
+      'aug': 8,
+      'sep': 9,
+      'oct': 10,
+      'nov': 11,
+      'dec': 12,
+    };
+    final month = months[match.group(2)!.toLowerCase()];
+    if (month == null) return null;
+    final utc = DateTime.utc(
+      int.parse(match.group(3)!),
+      month,
+      int.parse(match.group(1)!),
+      int.parse(match.group(4)!),
+      int.parse(match.group(5)!),
+      int.tryParse(match.group(6) ?? '') ?? 0,
+    );
+    final offset = Duration(
+      hours: int.tryParse(match.group(8) ?? '') ?? 0,
+      minutes: int.tryParse(match.group(9) ?? '') ?? 0,
+    );
+    return (match.group(7) == '-' ? utc.add(offset) : utc.subtract(offset))
+        .toLocal();
+  }
+
+  static DateTime? _extractWrittenEventDate(
+    Iterable<String> values, {
+    DateTime? reference,
+  }) {
+    for (final value in values) {
+      final parsed = _extractWrittenDate(value, reference: reference);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  static DateTime? _extractWrittenDate(String text, {DateTime? reference}) {
+    final iso = RegExp(
+      r'\b(20\d\d)-(\d\d)-(\d\d)(?:[T ](\d\d):(\d\d))?',
+    ).firstMatch(text);
+    if (iso != null) {
+      return _safeLocalDate(
+        int.parse(iso.group(1)!),
+        int.parse(iso.group(2)!),
+        int.parse(iso.group(3)!),
+        int.tryParse(iso.group(4) ?? '') ?? _timeNear(text, iso.end).$1,
+        int.tryParse(iso.group(5) ?? '') ?? _timeNear(text, iso.end).$2,
+      );
+    }
+
+    final numeric = RegExp(
+      r'\b([0-3]?\d)[./-]([01]?\d)[./-](20\d\d)\b',
+    ).firstMatch(text);
+    if (numeric != null) {
+      final time = _timeNear(text, numeric.end);
+      return _safeLocalDate(
+        int.parse(numeric.group(3)!),
+        int.parse(numeric.group(2)!),
+        int.parse(numeric.group(1)!),
+        time.$1,
+        time.$2,
+      );
+    }
+    final shortNumeric = RegExp(
+      r'\b([0-3]?\d)[./]([01]?\d)(?![./]\d)',
+    ).firstMatch(text);
+    if (shortNumeric != null) {
+      final anchor = reference ?? DateTime.now();
+      var date = _safeLocalDate(
+        anchor.year,
+        int.parse(shortNumeric.group(2)!),
+        int.parse(shortNumeric.group(1)!),
+      );
+      if (date != null &&
+          date.isBefore(anchor.subtract(const Duration(days: 120)))) {
+        date = _safeLocalDate(
+          anchor.year + 1,
+          int.parse(shortNumeric.group(2)!),
+          int.parse(shortNumeric.group(1)!),
+        );
+      }
+      if (date != null) {
+        final time = _timeNear(text, shortNumeric.end);
+        return DateTime(date.year, date.month, date.day, time.$1, time.$2);
+      }
+    }
+
+    const monthPattern =
+        r'gen(?:naio)?|jan(?:uary)?|feb(?:braio|ruary)?|mar(?:zo|ch)?|'
+        r'apr(?:ile|il)?|mag(?:gio)?|may|giu(?:gno)?|jun(?:e)?|'
+        r'lug(?:lio)?|jul(?:y)?|ago(?:sto)?|aug(?:ust)?|'
+        r'set(?:tembre)?|sep(?:t(?:ember)?)?|ott(?:obre)?|oct(?:ober)?|'
+        r'nov(?:embre|ember)?|dic(?:embre)?|dec(?:ember)?';
+    final dayFirst = RegExp(
+      '\\b([0-3]?\\d)\\s+($monthPattern)(?:\\s+(20\\d\\d))?\\b',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (dayFirst != null) {
+      return _namedMonthDate(
+        text,
+        day: int.parse(dayFirst.group(1)!),
+        monthName: dayFirst.group(2)!,
+        yearText: dayFirst.group(3),
+        matchEnd: dayFirst.end,
+        reference: reference,
+      );
+    }
+    final monthFirst = RegExp(
+      '\\b($monthPattern)\\s+([0-3]?\\d)(?:,?\\s+(20\\d\\d))?\\b',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (monthFirst != null) {
+      return _namedMonthDate(
+        text,
+        day: int.parse(monthFirst.group(2)!),
+        monthName: monthFirst.group(1)!,
+        yearText: monthFirst.group(3),
+        matchEnd: monthFirst.end,
+        reference: reference,
+      );
+    }
+    return null;
+  }
+
+  static DateTime? _namedMonthDate(
+    String source, {
+    required int day,
+    required String monthName,
+    required String? yearText,
+    required int matchEnd,
+    required DateTime? reference,
+  }) {
+    final month = _monthNumber(monthName);
+    if (month == null) return null;
+    final anchor = reference ?? DateTime.now();
+    var year = int.tryParse(yearText ?? '') ?? anchor.year;
+    var date = _safeLocalDate(year, month, day);
+    if (date == null) return null;
+    if (yearText == null &&
+        date.isBefore(anchor.subtract(const Duration(days: 120)))) {
+      year++;
+      date = _safeLocalDate(year, month, day);
+    }
+    if (date == null) return null;
+    final time = _timeNear(source, matchEnd);
+    return DateTime(date.year, date.month, date.day, time.$1, time.$2);
+  }
+
+  static int? _monthNumber(String value) {
+    final month = value.toLowerCase();
+    if (month.startsWith('gen') || month.startsWith('jan')) return 1;
+    if (month.startsWith('feb')) return 2;
+    if (month.startsWith('mar')) return 3;
+    if (month.startsWith('apr')) return 4;
+    if (month.startsWith('mag') || month == 'may') return 5;
+    if (month.startsWith('giu') || month.startsWith('jun')) return 6;
+    if (month.startsWith('lug') || month.startsWith('jul')) return 7;
+    if (month.startsWith('ago') || month.startsWith('aug')) return 8;
+    if (month.startsWith('set') || month.startsWith('sep')) return 9;
+    if (month.startsWith('ott') || month.startsWith('oct')) return 10;
+    if (month.startsWith('nov')) return 11;
+    if (month.startsWith('dic') || month.startsWith('dec')) return 12;
+    return null;
+  }
+
+  static (int, int) _timeNear(String source, int offset) {
+    final end = (offset + 64).clamp(0, source.length);
+    final tail = source.substring(offset, end);
+    final match = RegExp(
+      r'(?:\b(?:ore|h)\.?\s*([01]?\d|2[0-3])[:.]([0-5]\d)\b|'
+      r'\b([01]?\d|2[0-3]):([0-5]\d)\b)',
+      caseSensitive: false,
+    ).firstMatch(tail);
+    return (
+      int.tryParse(match?.group(1) ?? match?.group(3) ?? '') ?? 15,
+      int.tryParse(match?.group(2) ?? match?.group(4) ?? '') ?? 0,
+    );
+  }
+
+  static DateTime? _safeLocalDate(
+    int year,
+    int month,
+    int day, [
+    int hour = 15,
+    int minute = 0,
+  ]) {
+    final date = DateTime(year, month, day, hour, minute);
+    return date.year == year && date.month == month && date.day == day
+        ? date
+        : null;
+  }
+
+  static bool _isHttpUrl(String value) {
+    final uri = Uri.tryParse(value);
+    return uri != null &&
+        uri.hasAuthority &&
+        (uri.scheme == 'http' || uri.scheme == 'https');
   }
 
   static String _textOf(XmlElement parent, String localName) {
@@ -1390,22 +1838,6 @@ class PlannerStore extends ChangeNotifier {
     } on FormatException {
       return value;
     }
-  }
-
-  static DateTime? _extractDate(String text) {
-    final iso = RegExp(
-      r'\b(20\d\d)-(\d\d)-(\d\d)(?:[T ](\d\d):(\d\d))?',
-    ).firstMatch(text);
-    if (iso != null) {
-      return DateTime(
-        int.parse(iso.group(1)!),
-        int.parse(iso.group(2)!),
-        int.parse(iso.group(3)!),
-        int.tryParse(iso.group(4) ?? '') ?? 15,
-        int.tryParse(iso.group(5) ?? '') ?? 0,
-      );
-    }
-    return DateTime.tryParse(text.trim());
   }
 
   static int _stableHash(String value) {

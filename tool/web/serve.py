@@ -36,7 +36,7 @@ FEED_TYPES = (
 class FeedLinkParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self.links: list[tuple[str, str | None]] = []
+        self.links: list[tuple[str, str | None, str]] = []
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -58,7 +58,9 @@ class FeedLinkParser(HTMLParser):
                 or "ics" in media_type
             )
         ):
-            self.links.append((href, values.get("title")))
+            title = values.get("title")
+            if "oembed" not in href.lower() and "oembed" not in (title or "").lower():
+                self.links.append((href, title, media_type))
 
 
 def validate_public_url(url: str) -> urllib.parse.SplitResult:
@@ -131,7 +133,25 @@ def discover_feed(
     parser.feed(body.decode("utf-8", errors="replace"))
     if not parser.links:
         return None, None
-    href, title = parser.links[0]
+    page_path = urllib.parse.urlsplit(page_url).path.rstrip("/") + "/"
+
+    def priority(link: tuple[str, str | None, str]) -> tuple[int, int]:
+        href, title, media_type = link
+        resolved_path = urllib.parse.urlsplit(
+            urllib.parse.urljoin(page_url, href)
+        ).path.lower()
+        searchable = f"{href} {title or ''}".lower()
+        if "calendar" in media_type or "ics" in media_type:
+            return 0, len(resolved_path)
+        if "comment" in searchable:
+            return 9, len(resolved_path)
+        if page_path != "/" and resolved_path.startswith(page_path.lower()):
+            return 1, len(resolved_path)
+        if "event" in searchable or "calendar" in searchable:
+            return 2, len(resolved_path)
+        return 5, len(resolved_path)
+
+    href, title, _ = min(parser.links, key=priority)
     return urllib.parse.urljoin(page_url, href), title
 
 
@@ -143,6 +163,9 @@ class WeekendPlannerHandler(http.server.SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         if parsed.path in {"/feed-proxy", "/rss-proxy"}:
             self.proxy_feed(parsed)
+            return
+        if parsed.path == "/page-proxy":
+            self.proxy_page(parsed)
             return
         # This is a development server: always send the current Nix/web build.
         # A newly built file can have an older store timestamp than a browser's
@@ -187,6 +210,25 @@ class WeekendPlannerHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(body)
         except urllib.error.HTTPError as error:
             self.send_proxy_error(error.code, f"Feed server returned HTTP {error.code}")
+        except (OSError, ValueError, urllib.error.URLError) as error:
+            self.send_proxy_error(502, str(error))
+
+    def proxy_page(self, request_url: urllib.parse.SplitResult) -> None:
+        query = urllib.parse.parse_qs(request_url.query)
+        target = (query.get("url") or [""])[0]
+        if not target:
+            self.send_proxy_error(400, "Missing page URL")
+            return
+        try:
+            body, final_url, content_type = fetch(target)
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Feed-Final-URL", final_url)
+            self.end_headers()
+            self.wfile.write(body)
+        except urllib.error.HTTPError as error:
+            self.send_proxy_error(error.code, f"Page server returned HTTP {error.code}")
         except (OSError, ValueError, urllib.error.URLError) as error:
             self.send_proxy_error(502, str(error))
 
