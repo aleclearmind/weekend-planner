@@ -24,7 +24,7 @@ class _WeekendsPageState extends State<WeekendsPage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => widget.store.refreshCalendarForWeekends(weeks: _weeksShown),
+      (_) => widget.store.refreshCalendarForWeeks(weeks: _weeksShown),
     );
   }
 
@@ -32,7 +32,9 @@ class _WeekendsPageState extends State<WeekendsPage> {
   Widget build(BuildContext context) {
     final now = widget.now ?? DateTime.now();
     final today = dateOnly(now);
-    final firstFriday = firstRelevantFriday(now);
+    final currentWeek = weekStartFor(today);
+    final firstWeek = firstRelevantWeekStart(now, widget.store.enabledSlots);
+    final initialWeekOffset = firstWeek.difference(currentWeek).inDays ~/ 7;
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(20, 2, 20, 28),
       itemCount: _weeksShown + 1,
@@ -43,40 +45,41 @@ class _WeekendsPageState extends State<WeekendsPage> {
             child: OutlinedButton(
               onPressed: () {
                 setState(() => _weeksShown += 4);
-                widget.store.refreshCalendarForWeekends(weeks: _weeksShown);
+                widget.store.refreshCalendarForWeeks(weeks: _weeksShown);
               },
               style: OutlinedButton.styleFrom(
                 minimumSize: const Size.fromHeight(46),
                 shape: const StadiumBorder(),
               ),
-              child: const Text('Load more weekends'),
+              child: const Text('Load more weeks'),
             ),
           );
         }
-        final friday = addDays(firstFriday, weekendIndex * 7);
+        final weekStart = addDays(firstWeek, weekendIndex * 7);
+        final absoluteWeekIndex = initialWeekOffset + weekendIndex;
         return _WeekendSection(
           store: widget.store,
-          friday: friday,
+          weekStart: weekStart,
           today: today,
-          weekendIndex: weekendIndex,
-          onOpenPicker: (slotIndex) => _openPicker(friday, slotIndex),
+          weekIndex: absoluteWeekIndex,
+          onOpenPicker: (slotIndex) => _openPicker(weekStart, slotIndex),
           onOpenActivity: _openActivity,
           onClear: (slotIndex) {
-            widget.store.clearAssignment(friday, slotIndex);
-            _showMessage('Activity cleared from this weekend.');
+            widget.store.clearAssignment(weekStart, slotIndex);
+            _showMessage('Activity cleared from this week.');
           },
         );
       },
     );
   }
 
-  Future<void> _openPicker(DateTime friday, int slotIndex) async {
+  Future<void> _openPicker(DateTime weekStart, int slotIndex) async {
     final activity = await Navigator.push<ActivityIdea>(
       context,
       MaterialPageRoute(
         builder: (_) => ActivityPickerPage(
           store: widget.store,
-          friday: friday,
+          weekStart: weekStart,
           slotIndex: slotIndex,
         ),
       ),
@@ -111,39 +114,43 @@ class _WeekendsPageState extends State<WeekendsPage> {
 class _WeekendSection extends StatelessWidget {
   const _WeekendSection({
     required this.store,
-    required this.friday,
+    required this.weekStart,
     required this.today,
-    required this.weekendIndex,
+    required this.weekIndex,
     required this.onOpenPicker,
     required this.onOpenActivity,
     required this.onClear,
   });
 
   final PlannerStore store;
-  final DateTime friday;
+  final DateTime weekStart;
   final DateTime today;
-  final int weekendIndex;
+  final int weekIndex;
   final ValueChanged<int> onOpenPicker;
   final ValueChanged<ActivityIdea> onOpenActivity;
   final ValueChanged<int> onClear;
 
   @override
   Widget build(BuildContext context) {
-    final sunday = addDays(friday, 2);
-    final days = [
-      (name: 'Friday', date: friday, slotIndexes: const [0]),
-      (
-        name: 'Saturday',
-        date: addDays(friday, 1),
-        slotIndexes: const [1, 2, 3],
-      ),
-      (name: 'Sunday', date: sunday, slotIndexes: const [4, 5, 6]),
+    final days = <({String name, DateTime date, List<int> slotIndexes})>[
+      for (final day in WeekDay.values)
+        if (store.enabledSlots.any((slot) => slot.weekDay == day))
+          (
+            name: weekDayLabel(day),
+            date: addDays(weekStart, day.index),
+            slotIndexes: [
+              for (var index = 0; index < store.enabledSlots.length; index++)
+                if (store.enabledSlots[index].weekDay == day) index,
+            ],
+          ),
     ].where((day) => !day.date.isBefore(today)).toList();
-    final label = switch (weekendIndex) {
-      0 => 'This weekend',
-      1 => 'Next weekend',
-      _ => 'Weekend ${weekendIndex + 1}',
+    final label = switch (weekIndex) {
+      0 => 'This week',
+      1 => 'Next week',
+      _ => 'Week ${weekIndex + 1}',
     };
+    final firstDate = days.isEmpty ? weekStart : days.first.date;
+    final lastDate = days.isEmpty ? addDays(weekStart, 6) : days.last.date;
     return Padding(
       padding: const EdgeInsets.only(bottom: 25),
       child: Column(
@@ -165,8 +172,7 @@ class _WeekendSection extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  '${friday.day}–${sunday.day} '
-                  '${monthNames[sunday.month - 1]}',
+                  '${friendlyDate(firstDate)}–${friendlyDate(lastDate)}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -180,7 +186,7 @@ class _WeekendSection extends StatelessWidget {
               date: days[position].date,
               slotIndexes: days[position].slotIndexes,
               store: store,
-              weekendFriday: friday,
+              weekStart: weekStart,
               onOpenPicker: onOpenPicker,
               onOpenActivity: onOpenActivity,
               onClear: onClear,
@@ -199,7 +205,7 @@ class _DayGroup extends StatelessWidget {
     required this.date,
     required this.slotIndexes,
     required this.store,
-    required this.weekendFriday,
+    required this.weekStart,
     required this.onOpenPicker,
     required this.onOpenActivity,
     required this.onClear,
@@ -209,7 +215,7 @@ class _DayGroup extends StatelessWidget {
   final DateTime date;
   final List<int> slotIndexes;
   final PlannerStore store;
-  final DateTime weekendFriday;
+  final DateTime weekStart;
   final ValueChanged<int> onOpenPicker;
   final ValueChanged<ActivityIdea> onOpenActivity;
   final ValueChanged<int> onClear;
@@ -251,7 +257,7 @@ class _DayGroup extends StatelessWidget {
                 const Divider(height: 1, color: AppColors.outer),
               _SlotRow(
                 store: store,
-                friday: weekendFriday,
+                weekStart: weekStart,
                 slotIndex: slotIndexes[position],
                 onOpenPicker: () => onOpenPicker(slotIndexes[position]),
                 onOpenActivity: onOpenActivity,
@@ -268,7 +274,7 @@ class _DayGroup extends StatelessWidget {
 class _SlotRow extends StatelessWidget {
   const _SlotRow({
     required this.store,
-    required this.friday,
+    required this.weekStart,
     required this.slotIndex,
     required this.onOpenPicker,
     required this.onOpenActivity,
@@ -276,7 +282,7 @@ class _SlotRow extends StatelessWidget {
   });
 
   final PlannerStore store;
-  final DateTime friday;
+  final DateTime weekStart;
   final int slotIndex;
   final VoidCallback onOpenPicker;
   final ValueChanged<ActivityIdea> onOpenActivity;
@@ -284,12 +290,12 @@ class _SlotRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final slot = WeekendSlot.all[slotIndex];
-    final assignment = store.assignmentAt(friday, slotIndex);
+    final slot = store.enabledSlots[slotIndex];
+    final assignment = store.assignmentAt(weekStart, slotIndex);
     final activity = assignment == null
         ? null
         : store.activityById(assignment.activityId);
-    final calendarTitle = store.calendarEventAt(friday, slotIndex);
+    final calendarTitle = store.calendarEventAt(weekStart, slotIndex);
     return Container(
       color: AppColors.surface,
       constraints: const BoxConstraints(minHeight: 66),

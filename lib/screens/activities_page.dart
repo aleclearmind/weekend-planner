@@ -68,7 +68,7 @@ class _ActivitiesPageState extends State<ActivitiesPage> {
                   message: _bookingOnly
                       ? 'Turn off the filter to see spontaneous activities.'
                       : 'Save things you would enjoy, then assign them to '
-                            'weekend slots.',
+                            'planner slots.',
                   action: _bookingOnly
                       ? OutlinedButton(
                           onPressed: () => setState(() => _bookingOnly = false),

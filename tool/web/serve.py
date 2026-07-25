@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve the Flutter build and a constrained same-origin RSS proxy."""
+"""Serve the Flutter build and a constrained same-origin feed proxy."""
 
 from __future__ import annotations
 
@@ -25,6 +25,9 @@ FEED_TYPES = (
     "application/rss+xml",
     "application/atom+xml",
     "application/rdf+xml",
+    "text/calendar",
+    "application/ics",
+    "application/icalendar",
     "application/xml",
     "text/xml",
 )
@@ -51,6 +54,8 @@ class FeedLinkParser(HTMLParser):
                 "rss" in media_type
                 or "atom" in media_type
                 or "xml" in media_type
+                or "calendar" in media_type
+                or "ics" in media_type
             )
         ):
             self.links.append((href, values.get("title")))
@@ -136,8 +141,8 @@ class WeekendPlannerHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
-        if parsed.path == "/rss-proxy":
-            self.proxy_rss(parsed)
+        if parsed.path in {"/feed-proxy", "/rss-proxy"}:
+            self.proxy_feed(parsed)
             return
         # This is a development server: always send the current Nix/web build.
         # A newly built file can have an older store timestamp than a browser's
@@ -147,11 +152,11 @@ class WeekendPlannerHandler(http.server.SimpleHTTPRequestHandler):
                 del self.headers[header]
         super().do_GET()
 
-    def proxy_rss(self, request_url: urllib.parse.SplitResult) -> None:
+    def proxy_feed(self, request_url: urllib.parse.SplitResult) -> None:
         query = urllib.parse.parse_qs(request_url.query)
         target = (query.get("url") or [""])[0]
         if not target:
-            self.send_proxy_error(400, "Missing RSS URL")
+            self.send_proxy_error(400, "Missing feed URL")
             return
         try:
             body, final_url, content_type = fetch(target)
@@ -161,22 +166,23 @@ class WeekendPlannerHandler(http.server.SimpleHTTPRequestHandler):
                 discovered_url, discovered_title = discover_feed(body, final_url)
                 if not discovered_url:
                     raise ValueError(
-                        "No RSS or Atom feed was found in the page metadata"
+                        "No RSS, Atom, or iCalendar feed was found in the "
+                        "page metadata"
                     )
                 body, final_url, content_type = fetch(discovered_url)
 
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("X-RSS-Final-URL", final_url)
+            self.send_header("X-Feed-Final-URL", final_url)
             if discovered_url:
-                self.send_header("X-RSS-Discovered-URL", discovered_url)
+                self.send_header("X-Feed-Discovered-URL", discovered_url)
             if discovered_title:
                 safe_title = urllib.parse.quote(
                     discovered_title.replace("\r", " ").replace("\n", " "),
                     safe="",
                 )
-                self.send_header("X-RSS-Discovered-Title", safe_title)
+                self.send_header("X-Feed-Discovered-Title", safe_title)
             self.end_headers()
             self.wfile.write(body)
         except urllib.error.HTTPError as error:
@@ -207,7 +213,7 @@ def main() -> None:
     with http.server.ThreadingHTTPServer(("127.0.0.1", port), handler) as server:
         print(
             f"Weekend Planner on http://127.0.0.1:{port} "
-            f"(serving {directory}, RSS proxy enabled)",
+            f"(serving {directory}, feed proxy enabled)",
             flush=True,
         )
         server.serve_forever()

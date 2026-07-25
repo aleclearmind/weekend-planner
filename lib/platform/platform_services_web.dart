@@ -41,8 +41,11 @@ abstract final class PlatformServices {
 
   static Future<bool> hasCalendarAccess() async => false;
 
+  static Future<List<DeviceCalendar>> queryCalendars() async => const [];
+
   static Future<List<CalendarBusyEvent>> queryCalendarEvents({
     required DateTime start,
     required DateTime end,
+    required List<String> calendarIds,
   }) async => const [];
 }

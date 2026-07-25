@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.CalendarContract.Calendars
 import android.provider.CalendarContract.Instances
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -31,6 +32,7 @@ class MainActivity : FlutterActivity() {
             "openOsmAnd" -> result.success(openOsmAnd(call))
             "hasCalendarAccess" -> result.success(hasCalendarPermission())
             "requestCalendarAccess" -> requestCalendarAccess(result)
+            "queryCalendars" -> queryCalendars(result)
             "queryCalendarEvents" -> queryCalendarEvents(call, result)
             else -> result.notImplemented()
         }
@@ -156,6 +158,47 @@ class MainActivity : FlutterActivity() {
         pendingCalendarPermission = null
     }
 
+    private fun queryCalendars(result: MethodChannel.Result) {
+        if (!hasCalendarPermission()) {
+            result.error("calendar_permission", "Calendar access is not granted.", null)
+            return
+        }
+        try {
+            val projection = arrayOf(
+                Calendars._ID,
+                Calendars.CALENDAR_DISPLAY_NAME,
+                Calendars.ACCOUNT_NAME,
+            )
+            val calendars = mutableListOf<Map<String, Any>>()
+            contentResolver.query(
+                Calendars.CONTENT_URI,
+                projection,
+                "${Calendars.VISIBLE} = 1",
+                null,
+                "${Calendars.CALENDAR_DISPLAY_NAME} COLLATE NOCASE ASC",
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(Calendars._ID)
+                val nameIndex =
+                    cursor.getColumnIndexOrThrow(Calendars.CALENDAR_DISPLAY_NAME)
+                val accountIndex = cursor.getColumnIndexOrThrow(Calendars.ACCOUNT_NAME)
+                while (cursor.moveToNext()) {
+                    calendars.add(
+                        mapOf(
+                            "id" to cursor.getLong(idIndex).toString(),
+                            "name" to (
+                                cursor.getString(nameIndex) ?: "(unnamed calendar)"
+                            ),
+                            "accountName" to (cursor.getString(accountIndex) ?: ""),
+                        ),
+                    )
+                }
+            }
+            result.success(calendars)
+        } catch (error: Exception) {
+            result.error("calendar_list", error.message, error.toString())
+        }
+    }
+
     private fun queryCalendarEvents(call: MethodCall, result: MethodChannel.Result) {
         if (!hasCalendarPermission()) {
             result.error("calendar_permission", "Calendar access is not granted.", null)
@@ -167,28 +210,44 @@ class MainActivity : FlutterActivity() {
             result.error("invalid_window", "Invalid calendar query window.", null)
             return
         }
+        val calendarIds = call.argument<List<String>>("calendarIds")
+            ?.mapNotNull { it.toLongOrNull() }
+            .orEmpty()
+        if (calendarIds.isEmpty()) {
+            result.success(emptyList<Map<String, Any>>())
+            return
+        }
         try {
             val uriBuilder = Instances.CONTENT_URI.buildUpon()
             android.content.ContentUris.appendId(uriBuilder, start)
             android.content.ContentUris.appendId(uriBuilder, end)
-            val projection = arrayOf(Instances.TITLE, Instances.BEGIN, Instances.END)
+            val projection = arrayOf(
+                Instances.TITLE,
+                Instances.BEGIN,
+                Instances.END,
+                Instances.CALENDAR_ID,
+            )
+            val placeholders = calendarIds.joinToString(",") { "?" }
             val events = mutableListOf<Map<String, Any>>()
             contentResolver.query(
                 uriBuilder.build(),
                 projection,
-                null,
-                null,
+                "${Instances.CALENDAR_ID} IN ($placeholders)",
+                calendarIds.map(Long::toString).toTypedArray(),
                 "${Instances.BEGIN} ASC",
             )?.use { cursor ->
                 val titleIndex = cursor.getColumnIndexOrThrow(Instances.TITLE)
                 val startIndex = cursor.getColumnIndexOrThrow(Instances.BEGIN)
                 val endIndex = cursor.getColumnIndexOrThrow(Instances.END)
+                val calendarIndex =
+                    cursor.getColumnIndexOrThrow(Instances.CALENDAR_ID)
                 while (cursor.moveToNext()) {
                     events.add(
                         mapOf(
                             "title" to (cursor.getString(titleIndex) ?: "(untitled event)"),
                             "start" to cursor.getLong(startIndex),
                             "end" to cursor.getLong(endIndex),
+                            "calendarId" to cursor.getLong(calendarIndex).toString(),
                         ),
                     )
                 }

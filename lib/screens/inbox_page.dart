@@ -80,10 +80,10 @@ class _InboxPageState extends State<InboxPage> {
           child: store.inbox.isEmpty
               ? EmptyState(
                   icon: Icons.inbox_outlined,
-                  title: 'Your RSS inbox is empty',
+                  title: 'Your feed inbox is empty',
                   message: store.feeds.isEmpty
-                      ? 'Add feeds from venues and local guides, then import '
-                            'their entries as activity ideas.'
+                      ? 'Add RSS, Atom, or iCalendar feeds, then import their '
+                            'entries as activity ideas.'
                       : 'Refresh your feeds to look for new entries.',
                   action: store.feeds.isEmpty
                       ? FilledButton.icon(

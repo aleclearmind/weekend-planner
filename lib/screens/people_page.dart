@@ -10,14 +10,24 @@ class PeoplePage extends StatelessWidget {
   final PlannerStore store;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: store,
+    builder: (context, _) => _buildContent(context),
+  );
+
+  Widget _buildContent(BuildContext context) {
     if (store.cachedPeople.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.group_outlined,
         title: 'No saved names yet',
         message:
-            'Add someone to an activity and their name will be suggested '
-            'automatically next time.',
+            'Save someone here and their name will be suggested whenever '
+            'you edit an activity.',
+        action: FilledButton.icon(
+          onPressed: () => _addPerson(context),
+          icon: const Icon(Icons.person_add_alt_1_rounded),
+          label: const Text('Add person'),
+        ),
       );
     }
     return ListView(
@@ -25,10 +35,21 @@ class PeoplePage extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(3, 0, 3, 13),
-          child: Text(
-            'Names are cached locally. Type one in an activity to '
-            'autocomplete it.',
-            style: Theme.of(context).textTheme.bodySmall,
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Names are cached locally for activity autocomplete.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton.tonalIcon(
+                onPressed: () => _addPerson(context),
+                icon: const Icon(Icons.person_add_alt_1_rounded, size: 18),
+                label: const Text('Add'),
+              ),
+            ],
           ),
         ),
         ClipRRect(
@@ -62,18 +83,52 @@ class PeoplePage extends StatelessWidget {
     );
   }
 
+  Future<void> _addPerson(BuildContext context) async {
+    var enteredName = '';
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add person'),
+        content: TextFormField(
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Name'),
+          onChanged: (value) => enteredName = value,
+          onFieldSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, enteredName),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.trim().isEmpty) return;
+    if (!store.addPerson(name) && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That person is already saved.')),
+      );
+    }
+  }
+
   Future<void> _editPerson(BuildContext context, String currentName) async {
-    final controller = TextEditingController(text: currentName);
+    var editedName = currentName;
     final action = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Edit person'),
-        content: TextField(
-          controller: controller,
+        content: TextFormField(
+          initialValue: currentName,
           autofocus: true,
           textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(labelText: 'Name'),
-          onSubmitted: (_) => Navigator.pop(context, 'save'),
+          onChanged: (value) => editedName = value,
+          onFieldSubmitted: (_) => Navigator.pop(context, 'save'),
         ),
         actions: [
           TextButton(
@@ -94,11 +149,9 @@ class PeoplePage extends StatelessWidget {
         ],
       ),
     );
-    final newName = controller.text;
-    controller.dispose();
     if (action == 'save') {
-      if (newName.trim().isEmpty) return;
-      store.renamePerson(currentName, newName);
+      if (editedName.trim().isEmpty) return;
+      store.renamePerson(currentName, editedName);
     } else if (action == 'remove' && context.mounted) {
       final confirmed = await showDialog<bool>(
         context: context,

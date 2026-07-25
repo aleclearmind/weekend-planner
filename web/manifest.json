@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#F6FBF6",
     "theme_color": "#1F6B54",
-    "description": "Plan activities for the weekends ahead.",
+    "description": "Plan activities in the weekly slots that matter to you.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -69,8 +69,7 @@ def activity(
 
 
 today = dt.date(2026, 7, 25)
-# Dart's firstRelevantFriday chooses the upcoming Friday on Mon–Thu and the
-# current/previous Friday on Fri–Sun.
+# The planner groups configured slots by Monday-based calendar week.
 friday = today + dt.timedelta(days=4 - today.weekday())
 next_week = friday + dt.timedelta(days=7)
 spring_deadline = today + dt.timedelta(days=180)
@@ -80,7 +79,7 @@ luca = {"name": "Luca", "status": "interested"}
 marta = {"name": "Marta", "status": "possibly"}
 
 database = {
-    "schemaVersion": 2,
+    "schemaVersion": 3,
     "activities": [
         activity(
             "jazz",
@@ -143,10 +142,30 @@ database = {
         ),
     ],
     "assignments": {
-        f"{iso(friday)}#0": {"activityId": "jazz", "part": 1, "total": 1},
-        f"{iso(friday)}#1": {"activityId": "trek", "part": 1, "total": 2},
-        f"{iso(friday)}#2": {"activityId": "trek", "part": 2, "total": 2},
-        f"{iso(friday)}#5": {"activityId": "lunch", "part": 1, "total": 1},
+        f"{iso(friday)}#night": {
+            "activityId": "jazz",
+            "part": 1,
+            "total": 1,
+            "startKey": f"{iso(friday)}#night",
+        },
+        f"{iso(friday + dt.timedelta(days=1))}#morning": {
+            "activityId": "trek",
+            "part": 1,
+            "total": 2,
+            "startKey": f"{iso(friday + dt.timedelta(days=1))}#morning",
+        },
+        f"{iso(friday + dt.timedelta(days=1))}#afternoon": {
+            "activityId": "trek",
+            "part": 2,
+            "total": 2,
+            "startKey": f"{iso(friday + dt.timedelta(days=1))}#morning",
+        },
+        f"{iso(friday + dt.timedelta(days=2))}#afternoon": {
+            "activityId": "lunch",
+            "part": 1,
+            "total": 1,
+            "startKey": f"{iso(friday + dt.timedelta(days=2))}#afternoon",
+        },
     },
     "cachedPeople": ["Elena", "Luca", "Marta"],
     "feeds": [
@@ -154,12 +173,14 @@ database = {
             "id": "arci",
             "name": "ARCI Bellezza",
             "url": "https://arcibellezza.it/feed/",
+            "kind": "rss",
             "lastChecked": f"{iso(today)}T10:00:00.000",
         },
         {
             "id": "magnolia",
             "name": "Circolo Magnolia",
             "url": "https://www.circolomagnolia.it/feed/",
+            "kind": "rss",
             "lastChecked": f"{iso(today)}T10:00:00.000",
         },
     ],
@@ -173,6 +194,7 @@ database = {
             "eventDate": f"{iso(next_week)}T19:30:00.000",
             "startPart": "night",
             "slotLength": 1,
+            "locationName": "ARCI Bellezza",
             "imported": False,
         },
         {
@@ -184,6 +206,7 @@ database = {
             "eventDate": f"{iso(next_week + dt.timedelta(days=1))}T21:00:00.000",
             "startPart": "night",
             "slotLength": 1,
+            "locationName": "Circolo Magnolia",
             "imported": False,
         },
         {
@@ -197,10 +220,24 @@ database = {
             ),
             "startPart": "night",
             "slotLength": 1,
+            "locationName": "ARCI Bellezza",
             "imported": False,
         },
     ],
-    "settings": {"calendarEnabled": False},
+    "settings": {
+        "calendarEnabled": False,
+        "enabledSlots": [
+            "friday:night",
+            "saturday:morning",
+            "saturday:afternoon",
+            "saturday:night",
+            "sunday:morning",
+            "sunday:afternoon",
+            "sunday:night",
+        ],
+        "calendarSelectionInitialized": False,
+        "includedCalendarIds": [],
+    },
     "eventLog": [],
 }
 
@@ -221,7 +258,7 @@ init_script = (
     "Object.setPrototypeOf(FixedDate, OriginalDate);"
     "window.Date = FixedDate;"
     "window.localStorage.setItem("
-    + json.dumps("flutter.weekend_planner_state_v2")
+    + json.dumps("flutter.weekend_planner_state_v3")
     + ","
     + json.dumps(storage_value, ensure_ascii=False)
     + ");"
@@ -270,19 +307,25 @@ with sync_playwright() as playwright:
 
     labels = semantics_labels()
     print("semantics labels:", labels)
-    for label in ("Weekends", "Activities", "People", "Inbox"):
+    tabs = (
+        ("Planner", "weekends"),
+        ("Activities", "activities"),
+        ("People", "people"),
+        ("Inbox", "inbox"),
+    )
+    for label, _ in tabs:
         if tab(label) is None:
             print(f"FAIL: '{label}' was not exposed by Flutter semantics")
             ok = False
 
-    for label in ("Weekends", "Activities", "People", "Inbox"):
+    for label, filename in tabs:
         element = tab(label)
         if element is None:
             continue
         element.click(force=True)
         page.mouse.move(1, 1)
         page.wait_for_timeout(1_500)
-        target = os.path.join(OUT, f"tab_{label.lower()}.png")
+        target = os.path.join(OUT, f"tab_{filename}.png")
         page.screenshot(path=target)
         print("SCREENSHOT:", target)
 

@@ -9,26 +9,26 @@ import 'activity_form_page.dart';
 class ActivityPickerPage extends StatelessWidget {
   const ActivityPickerPage({
     required this.store,
-    required this.friday,
+    required this.weekStart,
     required this.slotIndex,
     super.key,
   });
 
   final PlannerStore store;
-  final DateTime friday;
+  final DateTime weekStart;
   final int slotIndex;
 
   @override
   Widget build(BuildContext context) {
-    final selected = WeekendSlot.all[slotIndex];
-    final date = slotDate(friday, slotIndex);
+    final selected = store.enabledSlots[slotIndex];
+    final date = slotDate(weekStart, slotIndex, store.enabledSlots);
     return AnimatedBuilder(
       animation: store,
       builder: (context, _) {
         final rows = List<ActivityIdea>.from(store.activities)
           ..sort((a, b) {
-            final aFits = store.fitProblem(a, friday, slotIndex) == null;
-            final bFits = store.fitProblem(b, friday, slotIndex) == null;
+            final aFits = store.fitProblem(a, weekStart, slotIndex) == null;
+            final bFits = store.fitProblem(b, weekStart, slotIndex) == null;
             if (aFits != bFits) return aFits ? -1 : 1;
             return a.name.toLowerCase().compareTo(b.name.toLowerCase());
           });
@@ -82,7 +82,7 @@ class ActivityPickerPage extends StatelessWidget {
                     final activity = rows[index];
                     final problem = store.fitProblem(
                       activity,
-                      friday,
+                      weekStart,
                       slotIndex,
                     );
                     return _PickerCard(
@@ -96,7 +96,7 @@ class ActivityPickerPage extends StatelessWidget {
                               14,
                       onAssign: problem == null
                           ? () {
-                              store.assign(activity, friday, slotIndex);
+                              store.assign(activity, weekStart, slotIndex);
                               Navigator.pop(context, activity);
                             }
                           : null,
@@ -197,8 +197,8 @@ class _PickerCard extends StatelessWidget {
                         SizedBox(width: 7),
                         Expanded(
                           child: Text(
-                            'This needs booking and the weekend is only days '
-                            'away.',
+                            'This needs booking and the selected date is only '
+                            'days away.',
                             style: TextStyle(
                               color: AppColors.warning,
                               fontSize: 12,

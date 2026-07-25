@@ -37,14 +37,25 @@ abstract final class PlatformServices {
   static Future<bool> hasCalendarAccess() async =>
       await _channel.invokeMethod<bool>('hasCalendarAccess') ?? false;
 
+  static Future<List<DeviceCalendar>> queryCalendars() async {
+    final values =
+        await _channel.invokeListMethod<Object?>('queryCalendars') ?? const [];
+    return values
+        .whereType<Map<Object?, Object?>>()
+        .map(DeviceCalendar.fromMap)
+        .toList();
+  }
+
   static Future<List<CalendarBusyEvent>> queryCalendarEvents({
     required DateTime start,
     required DateTime end,
+    required List<String> calendarIds,
   }) async {
     final values =
         await _channel.invokeListMethod<Object?>('queryCalendarEvents', {
           'start': start.millisecondsSinceEpoch,
           'end': end.millisecondsSinceEpoch,
+          'calendarIds': calendarIds,
         }) ??
         const [];
     return values

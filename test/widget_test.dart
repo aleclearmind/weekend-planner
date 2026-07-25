@@ -1,7 +1,9 @@
 import 'dart:convert';
 
-import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:weekend_planner/location_parser.dart';
 import 'package:weekend_planner/main.dart';
@@ -11,6 +13,7 @@ import 'package:weekend_planner/screens/activity_detail_page.dart';
 import 'package:weekend_planner/screens/activity_form_page.dart';
 import 'package:weekend_planner/screens/activity_picker_page.dart';
 import 'package:weekend_planner/screens/inbox_page.dart';
+import 'package:weekend_planner/screens/people_page.dart';
 import 'package:weekend_planner/screens/weekends_page.dart';
 
 void main() {
@@ -21,8 +24,8 @@ void main() {
     await tester.pumpWidget(WeekendPlannerApp(store: store));
     await tester.pumpAndSettle();
 
-    expect(find.text('Weekends'), findsWidgets);
-    expect(find.text('This weekend'), findsOneWidget);
+    expect(find.text('Planner'), findsWidgets);
+    expect(find.text('This week'), findsOneWidget);
     expect(find.text('Saturday'), findsWidgets);
     expect(find.text('Sunday'), findsWidgets);
   });
@@ -68,7 +71,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Available at any date.'), findsOneWidget);
-    expect(find.text('Weekend day'), findsOneWidget);
+    expect(find.text('Day of week'), findsOneWidget);
     expect(find.text('Any time'), findsOneWidget);
     expect(find.text('1w'), findsNothing);
     expect(tester.takeException(), isNull);
@@ -79,7 +82,10 @@ void main() {
   ) async {
     SharedPreferences.setMockInitialValues({});
     final store = await PlannerStore.load();
-    final friday = firstRelevantFriday(DateTime.now());
+    final weekStart = firstRelevantWeekStart(
+      DateTime.now(),
+      store.enabledSlots,
+    );
     store.activities.add(
       ActivityIdea(
         id: 'walk',
@@ -95,7 +101,11 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ActivityPickerPage(store: store, friday: friday, slotIndex: 0),
+        home: ActivityPickerPage(
+          store: store,
+          weekStart: weekStart,
+          slotIndex: 0,
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -104,7 +114,7 @@ void main() {
     await tester.tap(find.text('Long walk'));
     await tester.pump();
 
-    expect(store.assignmentAt(friday, 0)?.activityId, 'walk');
+    expect(store.assignmentAt(weekStart, 0)?.activityId, 'walk');
   });
 
   testWidgets('RSS inbox is compact and grouped by week', (tester) async {
@@ -158,24 +168,24 @@ void main() {
     () async {
       SharedPreferences.setMockInitialValues({});
       final store = await PlannerStore.load();
-      final friday = DateTime(2026, 7, 24);
+      final weekStart = DateTime(2026, 7, 20);
       final idea = ActivityIdea(
         id: 'test',
         name: 'Sunday lunch',
         rangeKind: DateRangeKind.exact,
         firstDate: DateTime(2026, 7, 26),
-        startDay: WeekendDay.sunday,
+        startDay: WeekDay.sunday,
         startPart: DayPart.afternoon,
         slotLength: 1,
         needsBooking: false,
         people: const [],
       );
 
-      expect(idea.isAvailableAt(slotDate(friday, 5)), isTrue);
-      expect(idea.isAvailableAt(slotDate(friday, 2)), isFalse);
-      expect(store.fitProblem(idea, friday, 5), isNull);
+      expect(idea.isAvailableAt(slotDate(weekStart, 5)), isTrue);
+      expect(idea.isAvailableAt(slotDate(weekStart, 2)), isFalse);
+      expect(store.fitProblem(idea, weekStart, 5), isNull);
       expect(
-        store.fitProblem(idea, friday, 2),
+        store.fitProblem(idea, weekStart, 2),
         'Starts on Sunday, not Saturday.',
       );
       expect(idea.slotLabel, 'Starts Sunday afternoon, lasts 1 slot');
@@ -220,48 +230,124 @@ void main() {
     },
   );
 
-  test('schema one migrates to schema two without modifying v1 data', () async {
+  test(
+    'schema one migrates through schema three without changing v1',
+    () async {
+      final activity = ActivityIdea(
+        id: 'kept',
+        name: 'Kept activity',
+        rangeKind: DateRangeKind.within,
+        firstDate: DateTime(2027, 1, 1),
+        startPart: DayPart.night,
+        slotLength: 1,
+        needsBooking: false,
+        people: const [],
+      );
+      final v1Activity = activity.toJson()
+        ..remove('startDay')
+        ..remove('frequencyCounterResetAt');
+      final v1Database = jsonEncode({
+        'schemaVersion': 1,
+        'activities': [v1Activity],
+        'assignments': <String, dynamic>{},
+        'cachedPeople': <String>[],
+        'feeds': <dynamic>[],
+        'inbox': <dynamic>[],
+      });
+      SharedPreferences.setMockInitialValues({
+        'weekend_planner_state_v1': v1Database,
+      });
+
+      final store = await PlannerStore.load();
+      final preferences = await SharedPreferences.getInstance();
+      final v3Database =
+          jsonDecode(preferences.getString('weekend_planner_state_v3')!)
+              as Map<String, dynamic>;
+
+      expect(store.activities.single.id, 'kept');
+      expect(store.activities.single.startDay, isNull);
+      expect(store.activities.single.frequencyCounterResetAt, isNull);
+      expect(jsonDecode(store.databaseJson())['schemaVersion'], 3);
+      expect(v3Database['schemaVersion'], 3);
+      expect(
+        (v3Database['activities'] as List<dynamic>).single['startDay'],
+        isNull,
+      );
+      expect(preferences.getString('weekend_planner_state_v1'), v1Database);
+    },
+  );
+
+  test('schema two migrates stable slot keys without changing v2', () async {
+    final v2Database = jsonEncode({
+      'schemaVersion': 2,
+      'activities': <dynamic>[],
+      'assignments': {
+        '2026-07-24#1': {'activityId': 'trek', 'part': 1, 'total': 2},
+        '2026-07-24#2': {'activityId': 'trek', 'part': 2, 'total': 2},
+      },
+      'cachedPeople': <String>[],
+      'feeds': [
+        {'id': 'venue', 'name': 'Venue', 'url': 'https://example.com/feed'},
+      ],
+      'inbox': <dynamic>[],
+      'settings': {'calendarEnabled': false},
+      'eventLog': <dynamic>[],
+    });
+    SharedPreferences.setMockInitialValues({
+      'weekend_planner_state_v2': v2Database,
+    });
+
+    final store = await PlannerStore.load();
+    final preferences = await SharedPreferences.getInstance();
+    final migrated = jsonDecode(store.databaseJson()) as Map<String, dynamic>;
+    final assignments = migrated['assignments'] as Map<String, dynamic>;
+
+    expect(migrated['schemaVersion'], 3);
+    expect(assignments.keys, contains('2026-07-25#morning'));
+    expect(assignments.keys, contains('2026-07-25#afternoon'));
+    expect(
+      (assignments['2026-07-25#afternoon'] as Map<String, dynamic>)['startKey'],
+      '2026-07-25#morning',
+    );
+    expect(store.feeds.single.kind, FeedKind.rss);
+    expect(store.enabledSlots.map((slot) => slot.id), [
+      for (final slot in PlannerSlot.defaults) slot.id,
+    ]);
+    expect(preferences.getString('weekend_planner_state_v2'), v2Database);
+    expect(preferences.getString('weekend_planner_state_v3'), isNotNull);
+  });
+
+  test('configured weekday slots keep assignments on stable keys', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PlannerStore.load();
+    const mondayNight = PlannerSlot(WeekDay.monday, DayPart.night);
+    final weekStart = DateTime(2026, 7, 27);
     final activity = ActivityIdea(
-      id: 'kept',
-      name: 'Kept activity',
-      rangeKind: DateRangeKind.within,
-      firstDate: DateTime(2027, 1, 1),
+      id: 'film',
+      name: 'Monday film',
+      rangeKind: DateRangeKind.anytime,
+      firstDate: weekStart,
+      startDay: WeekDay.monday,
       startPart: DayPart.night,
       slotLength: 1,
       needsBooking: false,
       people: const [],
     );
-    final v1Activity = activity.toJson()
-      ..remove('startDay')
-      ..remove('frequencyCounterResetAt');
-    final v1Database = jsonEncode({
-      'schemaVersion': 1,
-      'activities': [v1Activity],
-      'assignments': <String, dynamic>{},
-      'cachedPeople': <String>[],
-      'feeds': <dynamic>[],
-      'inbox': <dynamic>[],
-    });
-    SharedPreferences.setMockInitialValues({
-      'weekend_planner_state_v1': v1Database,
-    });
+    store.activities.add(activity);
 
-    final store = await PlannerStore.load();
-    final preferences = await SharedPreferences.getInstance();
-    final v2Database =
-        jsonDecode(preferences.getString('weekend_planner_state_v2')!)
-            as Map<String, dynamic>;
+    store.setSlotEnabled(mondayNight, true);
+    expect(store.enabledSlots.first.id, mondayNight.id);
+    expect(store.fitProblem(activity, weekStart, 0), isNull);
+    store.assign(activity, weekStart, 0);
+    store.setSlotEnabled(mondayNight, false);
+    store.setSlotEnabled(mondayNight, true);
 
-    expect(store.activities.single.id, 'kept');
-    expect(store.activities.single.startDay, isNull);
-    expect(store.activities.single.frequencyCounterResetAt, isNull);
-    expect(jsonDecode(store.databaseJson())['schemaVersion'], 2);
-    expect(v2Database['schemaVersion'], 2);
+    expect(store.assignmentAt(weekStart, 0)?.activityId, activity.id);
     expect(
-      (v2Database['activities'] as List<dynamic>).single['startDay'],
-      isNull,
+      (jsonDecode(store.databaseJson())['assignments'] as Map<String, dynamic>)
+          .keys,
+      contains('2026-07-27#night'),
     );
-    expect(preferences.getString('weekend_planner_state_v1'), v1Database);
   });
 
   testWidgets('a recurring frequency counter can be reset', (tester) async {
@@ -315,6 +401,66 @@ void main() {
       normalizeAllCapsTitle('Insieme è più bello – sociә'),
       'Insieme è più bello – sociә',
     );
+  });
+
+  test('iCalendar feeds are queried and imported as activities', () async {
+    SharedPreferences.setMockInitialValues({});
+    final client = MockClient(
+      (request) async => http.Response(
+        '''
+BEGIN:VCALENDAR
+VERSION:2.0
+X-WR-CALNAME:Neighborhood events
+BEGIN:VEVENT
+UID:concert-1
+DTSTART:20260727T203000
+SUMMARY:A VERY LOUD CONCERT
+LOCATION:Community Hall
+URL:https://example.com/concert
+END:VEVENT
+END:VCALENDAR
+''',
+        200,
+        headers: {'content-type': 'text/calendar; charset=utf-8'},
+      ),
+    );
+    final store = await PlannerStore.load(httpClient: client);
+    await store.addFeed('https://example.com/events.ics');
+
+    final result = await store.refreshFeedsIfDue(maxAge: Duration.zero);
+
+    expect(result.checked, 1);
+    expect(result.added, 1);
+    expect(store.feeds.single.kind, FeedKind.ics);
+    expect(store.feeds.single.name, 'Neighborhood events');
+    expect(store.inbox.single.title, 'A very loud concert');
+    expect(store.inbox.single.eventDate, DateTime(2026, 7, 27, 20, 30));
+    final activity = store.importInboxItem(store.inbox.single);
+    expect(activity.startDay, WeekDay.monday);
+    expect(activity.startPart, DayPart.night);
+    expect(activity.location?.name, 'Community Hall');
+    expect(activity.url, 'https://example.com/concert');
+  });
+
+  testWidgets('people can be added directly from the People tab', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PlannerStore.load();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: PeoplePage(store: store)),
+      ),
+    );
+    await tester.tap(find.text('Add person'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), 'Giulia');
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await tester.pumpAndSettle();
+
+    expect(store.cachedPeople, ['Giulia']);
+    expect(find.text('Giulia'), findsOneWidget);
   });
 
   test('locations accept coordinates, geo URLs, and full plus codes', () {

@@ -29,7 +29,7 @@ class _FeedManagerPageState extends State<FeedManagerPage> {
     builder: (context, _) => Scaffold(
       appBar: AppBar(
         leading: const BackButton(),
-        title: const Text('RSS feeds'),
+        title: const Text('Feeds'),
         actions: [
           IconButton(
             tooltip: 'Refresh all feeds',
@@ -51,8 +51,8 @@ class _FeedManagerPageState extends State<FeedManagerPage> {
         padding: const EdgeInsets.fromLTRB(20, 6, 20, 32),
         children: [
           Text(
-            'Add feeds from venues, museums, newsletters, or local guides. '
-            'New entries land in the Inbox, ready to become activities.',
+            'Add RSS, Atom, or iCalendar (.ics) feeds from venues and '
+            'calendars. New entries land in the Inbox as activity ideas.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 18),
@@ -68,8 +68,8 @@ class _FeedManagerPageState extends State<FeedManagerPage> {
                   textInputAction: TextInputAction.done,
                   onSubmitted: (_) => _addFeed(),
                   decoration: const InputDecoration(
-                    hintText: 'https://venue.example/events.rss',
-                    prefixIcon: Icon(Icons.rss_feed_rounded),
+                    hintText: 'https://venue.example/events.rss or .ics',
+                    prefixIcon: Icon(Icons.add_link_rounded),
                   ),
                 ),
               ),
@@ -96,11 +96,11 @@ class _FeedManagerPageState extends State<FeedManagerPage> {
           ),
           if (widget.store.feeds.isEmpty)
             const EmptyState(
-              icon: Icons.rss_feed_rounded,
+              icon: Icons.dynamic_feed_outlined,
               title: 'No feeds connected',
               message:
-                  'Paste an RSS or Atom URL above. We will remember it on '
-                  'this device.',
+                  'Paste an RSS, Atom, iCalendar, or discoverable web page '
+                  'URL above. We will remember it on this device.',
             )
           else
             ...widget.store.feeds.map(
@@ -248,7 +248,12 @@ class _FeedCard extends StatelessWidget {
               color: AppColors.primaryContainer,
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.rss_feed_rounded, color: AppColors.primary),
+            child: Icon(
+              feed.kind == FeedKind.ics
+                  ? Icons.calendar_month_rounded
+                  : Icons.rss_feed_rounded,
+              color: AppColors.primary,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -257,6 +262,7 @@ class _FeedCard extends StatelessWidget {
               children: [
                 Text(feed.name, style: Theme.of(context).textTheme.titleMedium),
                 Text(
+                  '${feed.kind == FeedKind.ics ? 'iCalendar' : 'RSS / Atom'} · '
                   '$itemCount ${itemCount == 1 ? 'entry' : 'entries'} · '
                   '${feed.lastChecked == null ? 'not checked yet' : 'checked ${friendlyDate(feed.lastChecked!)}'}',
                   style: Theme.of(context).textTheme.bodySmall,

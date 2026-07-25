@@ -239,7 +239,7 @@ class ActivityDetailPage extends StatelessWidget {
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          'Not assigned to a weekend yet.',
+                          'Not assigned to a planner slot yet.',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ),

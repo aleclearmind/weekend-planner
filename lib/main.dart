@@ -77,10 +77,31 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _tabIndex = 0;
 
-  static const _titles = ['Weekends', 'Activities', 'People', 'RSS inbox'];
+  static const _titles = ['Planner', 'Activities', 'People', 'Feed inbox'];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    widget.store.startPeriodicFeedRefresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    widget.store.stopPeriodicFeedRefresh();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    widget.store.refreshFeedsIfDue();
+    widget.store.refreshCalendarForWeeks();
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -124,7 +145,7 @@ class _HomeShellState extends State<HomeShell> {
           const NavigationDestination(
             icon: Icon(Icons.calendar_month_outlined),
             selectedIcon: Icon(Icons.calendar_month_rounded),
-            label: 'Weekends',
+            label: 'Planner',
           ),
           const NavigationDestination(
             icon: Icon(Icons.lightbulb_outline_rounded),

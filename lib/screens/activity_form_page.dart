@@ -27,7 +27,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
   late DateRangeKind _rangeKind;
   late DateTime _firstDate;
   late DateTime _secondDate;
-  late WeekendDay? _startDay;
+  late WeekDay? _startDay;
   late DayPart? _startPart;
   late int _slotLength;
   late bool _needsBooking;
@@ -89,17 +89,12 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    final timeSegments = _startDay == WeekendDay.friday
-        ? const [
-            ButtonSegment(value: 'any', label: Text('Any time')),
-            ButtonSegment(value: 'night', label: Text('Night')),
-          ]
-        : const [
-            ButtonSegment(value: 'any', label: Text('Any time')),
-            ButtonSegment(value: 'morning', label: Text('Morning')),
-            ButtonSegment(value: 'afternoon', label: Text('Afternoon')),
-            ButtonSegment(value: 'night', label: Text('Night')),
-          ];
+    const timeSegments = [
+      ButtonSegment(value: 'any', label: Text('Any time')),
+      ButtonSegment(value: 'morning', label: Text('Morning')),
+      ButtonSegment(value: 'afternoon', label: Text('Afternoon')),
+      ButtonSegment(value: 'night', label: Text('Night')),
+    ];
     return Scaffold(
       appBar: AppBar(
         leading: const BackButton(),
@@ -187,27 +182,23 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
           Text(_rangePreview, style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 24),
           const SectionLabel('Starts on'),
-          Text('Weekend day', style: Theme.of(context).textTheme.bodySmall),
+          Text('Day of week', style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 6),
-          SegmentedButton<String>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: 'any', label: Text('Any')),
-              ButtonSegment(value: 'friday', label: Text('Fri')),
-              ButtonSegment(value: 'saturday', label: Text('Sat')),
-              ButtonSegment(value: 'sunday', label: Text('Sun')),
+          DropdownButtonFormField<String>(
+            initialValue: _startDay?.name ?? 'any',
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.today_rounded),
+            ),
+            items: [
+              const DropdownMenuItem(value: 'any', child: Text('Any day')),
+              for (final day in WeekDay.values)
+                DropdownMenuItem(
+                  value: day.name,
+                  child: Text(weekDayLabel(day)),
+                ),
             ],
-            selected: {_startDay?.name ?? 'any'},
-            onSelectionChanged: (values) => setState(() {
-              final value = values.single;
-              _startDay = value == 'any'
-                  ? null
-                  : WeekendDay.values.byName(value);
-              if (_startDay == WeekendDay.friday &&
-                  _startPart != null &&
-                  _startPart != DayPart.night) {
-                _startPart = DayPart.night;
-              }
+            onChanged: (value) => setState(() {
+              _startDay = value == 'any' ? null : WeekDay.values.byName(value!);
             }),
           ),
           const SizedBox(height: 12),
@@ -259,7 +250,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
               _RoundIconButton(
                 icon: Icons.add_rounded,
                 tooltip: 'One slot more',
-                onPressed: _slotLength < WeekendSlot.all.length
+                onPressed: _slotLength < widget.store.enabledSlots.length
                     ? () => setState(() => _slotLength++)
                     : null,
               ),
@@ -268,7 +259,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
           const SizedBox(height: 20),
           _SwitchSection(
             title: 'Needs booking',
-            subtitle: 'It needs organizing before the weekend arrives.',
+            subtitle: 'It needs organizing before the planned date arrives.',
             value: _needsBooking,
             onChanged: (value) => setState(() => _needsBooking = value),
           ),
@@ -652,7 +643,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete this activity?'),
-        content: const Text('It will also be removed from any weekend slots.'),
+        content: const Text('It will also be removed from any planner slots.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
