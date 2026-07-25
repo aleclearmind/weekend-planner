@@ -1,0 +1,185 @@
+import 'package:flutter/material.dart';
+
+import '../app_theme.dart';
+import '../planner_store.dart';
+import '../widgets.dart';
+
+class PeoplePage extends StatelessWidget {
+  const PeoplePage({required this.store, super.key});
+
+  final PlannerStore store;
+
+  @override
+  Widget build(BuildContext context) {
+    if (store.cachedPeople.isEmpty) {
+      return const EmptyState(
+        icon: Icons.group_outlined,
+        title: 'No saved names yet',
+        message:
+            'Add someone to an activity and their name will be suggested '
+            'automatically next time.',
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(3, 0, 3, 13),
+          child: Text(
+            'Names are cached locally. Type one in an activity to '
+            'autocomplete it.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Column(
+            children: [
+              for (
+                var index = 0;
+                index < store.cachedPeople.length;
+                index++
+              ) ...[
+                if (index > 0) const Divider(height: 1, color: AppColors.outer),
+                _PersonRow(
+                  name: store.cachedPeople[index],
+                  activityCount: store.activities
+                      .where(
+                        (activity) => activity.people.any(
+                          (person) =>
+                              person.name.toLowerCase() ==
+                              store.cachedPeople[index].toLowerCase(),
+                        ),
+                      )
+                      .length,
+                  onEdit: () => _editPerson(context, store.cachedPeople[index]),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editPerson(BuildContext context, String currentName) async {
+    final controller = TextEditingController(text: currentName);
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit person'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Name'),
+          onSubmitted: (_) => Navigator.pop(context, 'save'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'remove'),
+            child: Text(
+              'Remove',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'save'),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    final newName = controller.text;
+    controller.dispose();
+    if (action == 'save') {
+      if (newName.trim().isEmpty) return;
+      store.renamePerson(currentName, newName);
+    } else if (action == 'remove' && context.mounted) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Remove $currentName?'),
+          content: const Text(
+            'The name will also be removed from every activity.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Remove'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed == true) store.removePerson(currentName);
+    }
+  }
+}
+
+class _PersonRow extends StatelessWidget {
+  const _PersonRow({
+    required this.name,
+    required this.activityCount,
+    required this.onEdit,
+  });
+
+  final String name;
+  final int activityCount;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    color: AppColors.surface,
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    child: Row(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: const BoxDecoration(
+            color: AppColors.primaryContainer,
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            name.isEmpty ? '?' : name.characters.first.toUpperCase(),
+            style: const TextStyle(
+              color: AppColors.primaryDark,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(name, style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                activityCount == 0
+                    ? 'No activities yet'
+                    : 'In $activityCount '
+                          '${activityCount == 1 ? 'activity' : 'activities'}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          tooltip: 'Edit person',
+          onPressed: onEdit,
+          icon: const Icon(Icons.edit_outlined, size: 20),
+        ),
+      ],
+    ),
+  );
+}
