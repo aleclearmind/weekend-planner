@@ -26,7 +26,13 @@ class _InboxPageState extends State<InboxPage> {
     final selectedFeed = store.feeds.any((feed) => feed.id == _feedFilter)
         ? _feedFilter
         : null;
-    final visible = store.inbox
+    final currentInbox = store.inbox
+        .where(
+          (item) =>
+              !dateOnly(item.eventDate).isBefore(dateOnly(DateTime.now())),
+        )
+        .toList();
+    final visible = currentInbox
         .where((item) => selectedFeed == null || item.feedId == selectedFeed)
         .toList();
     final pending = visible.where((item) => !item.imported).length;
@@ -78,7 +84,7 @@ class _InboxPageState extends State<InboxPage> {
             ),
           ),
         Expanded(
-          child: store.inbox.isEmpty
+          child: currentInbox.isEmpty
               ? EmptyState(
                   icon: Icons.inbox_outlined,
                   title: 'Your feed inbox is empty',
@@ -223,7 +229,7 @@ class _InboxCard extends StatelessWidget {
           children: [
             Text(
               normalizeAllCapsTitle(item.title),
-              maxLines: 2,
+              maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleMedium,
             ),
@@ -232,8 +238,12 @@ class _InboxCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    '${item.source} · ${isoDate(item.eventDate)} · '
-                    '${item.startPart.name}',
+                    [
+                      if (item.locationName != null) item.locationName!,
+                      isoDate(item.eventDate),
+                      item.startPart.name,
+                      item.source,
+                    ].join(' · '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall,

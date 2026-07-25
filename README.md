@@ -39,8 +39,9 @@ Claude Design mockup and runs on Android and the web.
   activities. HTML autodiscovery also recognizes linked calendar feeds.
 - Normalizes all-caps RSS titles, carries the entry URL into the activity,
   opens the editor immediately after import, and filters the inbox by source.
-  Inbox entries open into a read-only detail view. The compact inbox groups
-  entries by week and decodes feed bytes according to their declared encoding.
+  Inbox entries open into a read-only detail view. The compact inbox hides past
+  events, includes available locations, truncates previews to one line, groups
+  entries by week, and decodes bytes according to their declared encoding.
 - Infers RSS event dates from explicit event fields, dates written in the
   title/body, or structured `Event.startDate` data on the linked page. RSS
   publication dates are never treated as event dates, and entries without a

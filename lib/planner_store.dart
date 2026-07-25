@@ -38,6 +38,13 @@ class _FetchedFeed {
   final String? discoveredTitle;
 }
 
+class _LinkedEventData {
+  const _LinkedEventData({this.date, this.locationName});
+
+  final DateTime? date;
+  final String? locationName;
+}
+
 class PlannerStore extends ChangeNotifier {
   PlannerStore._(this._preferences, this._httpClient);
 
@@ -69,7 +76,7 @@ class PlannerStore extends ChangeNotifier {
   bool isRefreshingFeeds = false;
   bool isRefreshingCalendar = false;
   final Map<String, String> _calendarSlotTitles = {};
-  final Map<String, DateTime?> _linkedPageEventDates = {};
+  final Map<String, _LinkedEventData> _linkedPageEventData = {};
 
   static Future<PlannerStore> load({http.Client? httpClient}) async {
     final preferences = await SharedPreferences.getInstance();
@@ -90,9 +97,11 @@ class PlannerStore extends ChangeNotifier {
       final migrated = _migrateDatabase(decoded);
       store._restore(migrated);
       final samplesRemoved = store._removeLegacySampleData();
+      final pastInboxRemoved = store._removePastInboxItems();
       if (currentEncoded == null ||
           sourceVersion != currentSchemaVersion ||
-          samplesRemoved) {
+          samplesRemoved ||
+          pastInboxRemoved) {
         await store._persist();
       }
     } on Object catch (error, stackTrace) {
@@ -472,7 +481,7 @@ class PlannerStore extends ChangeNotifier {
     if (feeds.any((feed) => feed.url == uri.toString())) {
       throw const FormatException('That feed is already in your list.');
     }
-    final name = uri.host.replaceFirst(RegExp(r'^www\.'), '');
+    final name = _defaultFeedName(uri);
     final path = uri.path.toLowerCase();
     final feed = RssFeed(
       id: _newId('feed'),
@@ -488,7 +497,13 @@ class PlannerStore extends ChangeNotifier {
   void renameFeed(String id, String name) {
     final index = feeds.indexWhere((feed) => feed.id == id);
     if (index == -1 || name.trim().isEmpty) return;
-    feeds[index] = feeds[index].copyWith(name: name.trim());
+    final normalized = name.trim();
+    feeds[index] = feeds[index].copyWith(name: normalized);
+    for (var itemIndex = 0; itemIndex < inbox.length; itemIndex++) {
+      if (inbox[itemIndex].feedId == id) {
+        inbox[itemIndex] = inbox[itemIndex].copyWith(source: normalized);
+      }
+    }
     _changed();
   }
 
@@ -519,17 +534,22 @@ class PlannerStore extends ChangeNotifier {
     var skipped = 0;
     final errors = <String>[];
     try {
+      _removePastInboxItems();
       for (final feed in selected) {
         try {
           final fetched = await _fetchFeed(feed.url);
           final refreshedFeed = feed.copyWith(
             url: fetched.url,
             kind: fetched.kind,
-            name: fetched.discoveredTitle,
+            name:
+                feed.lastChecked == null &&
+                    feed.name == _defaultFeedName(Uri.parse(feed.url))
+                ? fetched.discoveredTitle
+                : null,
             lastChecked: DateTime.now(),
           );
           final skippedRssIds = <String>{};
-          final parsed = switch (fetched.kind) {
+          final candidates = switch (fetched.kind) {
             FeedKind.rss => await _parseXmlFeed(
               refreshedFeed,
               fetched.body,
@@ -537,6 +557,21 @@ class PlannerStore extends ChangeNotifier {
             ),
             FeedKind.ics => _parseIcsFeed(refreshedFeed, fetched.body),
           };
+          final parsed = candidates
+              .where((item) => !_isPastEvent(item.eventDate))
+              .toList();
+          final pastCount = candidates.length - parsed.length;
+          if (pastCount > 0) {
+            _appendLog(
+              category: 'feed',
+              message:
+                  'Filtered $pastCount past '
+                  '${pastCount == 1 ? 'event' : 'events'} from ${feed.name}.',
+              details:
+                  'Events before ${isoDate(DateTime.now())} are not kept in '
+                  'the feed inbox.',
+            );
+          }
           if (skippedRssIds.isNotEmpty) {
             skipped += skippedRssIds.length;
             inbox.removeWhere(
@@ -975,6 +1010,15 @@ class PlannerStore extends ChangeNotifier {
     }
   }
 
+  bool _removePastInboxItems({DateTime? now}) {
+    final before = inbox.length;
+    inbox.removeWhere((item) => _isPastEvent(item.eventDate, now));
+    return inbox.length != before;
+  }
+
+  static bool _isPastEvent(DateTime eventDate, [DateTime? now]) =>
+      dateOnly(eventDate).isBefore(dateOnly(now ?? DateTime.now()));
+
   bool _removeLegacySampleData() {
     const sampleIds = {
       'seed-trek',
@@ -1406,6 +1450,7 @@ class PlannerStore extends ChangeNotifier {
       _textOf(node, 'date'),
     ]);
     final declaredEventDate = _firstExplicitEventField(node);
+    var locationName = _firstExplicitEventLocation(node);
     final guid = _textOf(node, 'guid').trim();
     var link = _textOf(node, 'link').trim();
     if (link.isEmpty) {
@@ -1425,8 +1470,12 @@ class PlannerStore extends ChangeNotifier {
           rawTitle,
           description,
         ], reference: publicationDate);
-    if (eventDate == null && _isHttpUrl(link)) {
-      eventDate = await _eventDateFromLinkedPage(link);
+    if (_isHttpUrl(link) &&
+        (eventDate == null ||
+            (locationName == null && _looksLikeEventFeed(feed)))) {
+      final linkedData = await _eventDataFromLinkedPage(link);
+      eventDate ??= linkedData.date;
+      locationName ??= linkedData.locationName;
     }
     if (eventDate == null) {
       skippedIds.add(itemId);
@@ -1451,26 +1500,29 @@ class PlannerStore extends ChangeNotifier {
       eventDate: eventDate,
       startPart: inferDayPart(eventDate),
       slotLength: 1,
+      locationName: locationName,
     );
   }
 
-  Future<DateTime?> _eventDateFromLinkedPage(String link) async {
-    if (_linkedPageEventDates.containsKey(link)) {
-      return _linkedPageEventDates[link];
+  Future<_LinkedEventData> _eventDataFromLinkedPage(String link) async {
+    final cached = _linkedPageEventData[link];
+    if (cached != null) {
+      return cached;
     }
-    DateTime? result;
+    var result = const _LinkedEventData();
     try {
       final response = await _getFeedUrl(Uri.parse(link), rawHtml: true);
       _ensureSuccess(response);
-      result = _structuredEventDateFromHtml(_decodeFeedResponse(response));
+      result = _structuredEventDataFromHtml(_decodeFeedResponse(response));
       _appendLog(
         category: 'feed',
-        message: result == null
+        message: result.date == null
             ? 'No structured event date found on an RSS entry page.'
-            : 'Found a structured event date on an RSS entry page.',
+            : 'Found structured event details on an RSS entry page.',
         details:
             'Page: $link\n'
-            'Result: ${result?.toIso8601String() ?? '(none)'}',
+            'Date: ${result.date?.toIso8601String() ?? '(none)'}\n'
+            'Location: ${result.locationName ?? '(none)'}',
       );
     } on Object catch (error, stackTrace) {
       _appendLog(
@@ -1482,11 +1534,11 @@ class PlannerStore extends ChangeNotifier {
             '${error.runtimeType}: $error\n$stackTrace',
       );
     }
-    _linkedPageEventDates[link] = result;
+    _linkedPageEventData[link] = result;
     return result;
   }
 
-  static DateTime? _structuredEventDateFromHtml(String source) {
+  static _LinkedEventData _structuredEventDataFromHtml(String source) {
     final document = html_parser.parse(source);
     for (final script in document.querySelectorAll(
       'script[type="application/ld+json"]',
@@ -1496,7 +1548,12 @@ class PlannerStore extends ChangeNotifier {
         for (final object in _jsonObjects(decoded)) {
           if (!_isSchemaEvent(object['@type'])) continue;
           final date = _parseStructuredDate(object['startDate']);
-          if (date != null) return date;
+          final locationName = _schemaLocationName(
+            object['location'] ?? object['Location'],
+          );
+          if (date != null || locationName != null) {
+            return _LinkedEventData(date: date, locationName: locationName);
+          }
         }
       } on FormatException {
         // A page can contain unrelated malformed JSON-LD blocks. Keep looking.
@@ -1514,10 +1571,10 @@ class PlannerStore extends ChangeNotifier {
               element.attributes['datetime'] ??
               element.text,
         );
-        if (date != null) return date;
+        if (date != null) return _LinkedEventData(date: date);
       }
     }
-    return null;
+    return const _LinkedEventData();
   }
 
   static Iterable<Map<String, dynamic>> _jsonObjects(Object? value) sync* {
@@ -1539,6 +1596,42 @@ class PlannerStore extends ChangeNotifier {
       return value.toLowerCase().split('/').last == 'event';
     }
     return value is List && value.any(_isSchemaEvent);
+  }
+
+  static String? _schemaLocationName(Object? value) {
+    if (value is String) return _cleanLocationText(value);
+    if (value is List) {
+      final parts = value
+          .map(_schemaLocationName)
+          .whereType<String>()
+          .toSet()
+          .toList();
+      return parts.isEmpty ? null : parts.join(', ');
+    }
+    if (value is! Map) return null;
+    final name = _schemaLocationName(value['name']);
+    final addressValue = value['address'];
+    final address = addressValue is Map
+        ? [
+            addressValue['streetAddress'],
+            addressValue['postalCode'],
+            addressValue['addressLocality'],
+            addressValue['addressRegion'],
+            addressValue['addressCountry'],
+          ].map(_schemaLocationName).whereType<String>().toSet().join(', ')
+        : _schemaLocationName(addressValue);
+    final parts = [
+      name,
+      _cleanLocationText(address ?? ''),
+    ].whereType<String>().toSet().toList();
+    return parts.isEmpty ? null : parts.join(', ');
+  }
+
+  static String? _cleanLocationText(String value) {
+    final normalized = (html_parser.parseFragment(value).text ?? '')
+        .trim()
+        .replaceAll(RegExp(r'\s+'), ' ');
+    return normalized.isEmpty || normalized == '-' ? null : normalized;
   }
 
   static DateTime? _parseStructuredDate(Object? value) {
@@ -1578,6 +1671,25 @@ class PlannerStore extends ChangeNotifier {
     }
     return null;
   }
+
+  static String? _firstExplicitEventLocation(XmlElement node) {
+    const locationFieldNames = {'eventlocation', 'location', 'venue', 'where'};
+    for (final element in node.descendants.whereType<XmlElement>()) {
+      final name = element.name.local.toLowerCase().replaceAll(
+        RegExp(r'[-_]'),
+        '',
+      );
+      if (!locationFieldNames.contains(name)) continue;
+      final location = _cleanLocationText(element.innerText);
+      if (location != null) return location;
+    }
+    return null;
+  }
+
+  static bool _looksLikeEventFeed(RssFeed feed) => RegExp(
+    r'event|calendar|agenda|concert|spettacol',
+    caseSensitive: false,
+  ).hasMatch('${feed.name} ${feed.url}');
 
   static DateTime? _firstParsedFeedTimestamp(Iterable<String> values) {
     for (final value in values) {
@@ -1863,6 +1975,9 @@ class PlannerStore extends ChangeNotifier {
 
   static String _slotKey(DateTime weekStart, PlannerSlot slot) =>
       '${isoDate(slotDateFor(weekStart, slot))}#${slot.part.name}';
+
+  static String _defaultFeedName(Uri uri) =>
+      uri.host.replaceFirst(RegExp(r'^www\.'), '');
 
   static int _compareSlots(PlannerSlot a, PlannerSlot b) {
     final byDay = a.weekDay.index.compareTo(b.weekDay.index);

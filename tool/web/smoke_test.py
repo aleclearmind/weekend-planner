@@ -194,7 +194,7 @@ database = {
             "eventDate": f"{iso(next_week)}T19:30:00.000",
             "startPart": "night",
             "slotLength": 1,
-            "locationName": "ARCI Bellezza",
+            "locationName": "Via Giovanni Bellezza 16, Milano",
             "imported": False,
         },
         {
@@ -206,7 +206,7 @@ database = {
             "eventDate": f"{iso(next_week + dt.timedelta(days=1))}T21:00:00.000",
             "startPart": "night",
             "slotLength": 1,
-            "locationName": "Circolo Magnolia",
+            "locationName": "Circolo Magnolia, Segrate",
             "imported": False,
         },
         {
@@ -220,7 +220,7 @@ database = {
             ),
             "startPart": "night",
             "slotLength": 1,
-            "locationName": "ARCI Bellezza",
+            "locationName": "Via Giovanni Bellezza 16, Milano",
             "imported": False,
         },
     ],

@@ -403,10 +403,10 @@ class RssInboxItem {
   final String? locationName;
   final bool imported;
 
-  RssInboxItem copyWith({bool? imported}) => RssInboxItem(
+  RssInboxItem copyWith({String? source, bool? imported}) => RssInboxItem(
     id: id,
     feedId: feedId,
-    source: source,
+    source: source ?? this.source,
     title: title,
     link: link,
     eventDate: eventDate,

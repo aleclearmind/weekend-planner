@@ -109,7 +109,13 @@ class _FeedManagerPageState extends State<FeedManagerPage> {
                 child: _FeedCard(
                   feed: feed,
                   itemCount: widget.store.inbox
-                      .where((item) => item.feedId == feed.id)
+                      .where(
+                        (item) =>
+                            item.feedId == feed.id &&
+                            !dateOnly(
+                              item.eventDate,
+                            ).isBefore(dateOnly(DateTime.now())),
+                      )
                       .length,
                   onRefresh: widget.store.isRefreshingFeeds
                       ? null

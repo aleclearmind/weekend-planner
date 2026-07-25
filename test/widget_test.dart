@@ -135,8 +135,10 @@ void main() {
       eventDate: date,
       startPart: DayPart.night,
       slotLength: 1,
+      locationName: 'Via Bellezza 16',
     );
     store.inbox.addAll([
+      item('past', 'Past event', addDays(currentWeek, -1)),
       item('one', 'Insieme è più bello', nextWeek),
       item('two', 'Oltre i confini – sociә', addDays(nextWeek, 2)),
       item('three', 'A later event', followingWeek),
@@ -160,6 +162,17 @@ void main() {
     expect(find.text('Import as activity'), findsNothing);
     expect(find.text('Import'), findsNWidgets(3));
     expect(find.text('Insieme è più bello'), findsOneWidget);
+    expect(find.text('Past event'), findsNothing);
+    final title = tester.widget<Text>(find.text('Insieme è più bello'));
+    expect(title.maxLines, 1);
+    expect(title.overflow, TextOverflow.ellipsis);
+    final preview = tester.widget<Text>(
+      find.text(
+        'Via Bellezza 16 · ${isoDate(nextWeek)} · night · ARCI Bellezza',
+      ),
+    );
+    expect(preview.maxLines, 1);
+    expect(preview.overflow, TextOverflow.ellipsis);
     await tester.tap(find.text('Insieme è più bello'));
     await tester.pumpAndSettle();
 
@@ -490,7 +503,10 @@ END:VCALENDAR
 <!doctype html>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"Event",
- "name":"A concert","startDate":"2026-09-13 17:30:00"}
+ "name":"A concert","startDate":"2026-09-13 17:30:00",
+ "location":{"@type":"Place","name":"Community Hall",
+             "address":{"streetAddress":"1 Main Street",
+                        "addressLocality":"Milan"}}}
 </script>
 ''',
           200,
@@ -527,6 +543,14 @@ END:VCALENDAR
       containsAll(['/events.xml', '/structured', '/unknown']),
     );
     expect(
+      store.inbox
+          .singleWhere(
+            (item) => item.title == 'A concert with a structured page',
+          )
+          .locationName,
+      'Community Hall, 1 Main Street, Milan',
+    );
+    expect(
       store.eventLog.any(
         (entry) =>
             entry.message ==
@@ -558,6 +582,7 @@ END:VCALENDAR
         '''
 BEGIN:VCALENDAR
 VERSION:2.0
+X-WR-CALNAME:Events from source
 BEGIN:VEVENT
 UID:event-1
 DTSTART:20260905T230000
@@ -570,14 +595,40 @@ END:VCALENDAR
       );
     });
     final store = await PlannerStore.load(httpClient: client);
-    await store.addFeed('https://example.com/');
+    final feed = await store.addFeed('https://example.com/');
+    store.inbox.add(
+      RssInboxItem(
+        id: 'past',
+        feedId: feed.id,
+        source: feed.name,
+        title: 'Past event',
+        link: 'https://example.com/past',
+        eventDate: addDays(dateOnly(DateTime.now()), -1),
+        startPart: DayPart.night,
+        slotLength: 1,
+      ),
+    );
 
     final result = await store.refreshFeedsIfDue(maxAge: Duration.zero);
 
     expect(result.added, 1);
+    expect(store.inbox, hasLength(1));
+    expect(store.inbox.single.title, 'Calendar event');
     expect(store.feeds.single.kind, FeedKind.ics);
+    expect(store.feeds.single.name, 'Events');
     expect(store.feeds.single.url, 'https://example.com/events.ics');
     expect(requests.map((uri) => uri.path), ['/', '/events.ics']);
+
+    store.renameFeed(store.feeds.single.id, 'My calendar');
+    await store.refreshFeedsIfDue(maxAge: Duration.zero);
+
+    expect(store.feeds.single.name, 'My calendar');
+    expect(store.inbox.single.source, 'My calendar');
+    expect(requests.map((uri) => uri.path), [
+      '/',
+      '/events.ics',
+      '/events.ics',
+    ]);
   });
 
   test(
