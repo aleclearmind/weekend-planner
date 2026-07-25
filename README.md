@@ -6,25 +6,27 @@ supplied Claude Design mockup and runs on Android and the web.
 ## Screenshots
 
 <p align="center">
-  <img src="https://github.com/aleclearmind/weekend-planner/releases/latest/download/weekend-planner-web-weekends.png" alt="Upcoming weekends" width="210">
-  <img src="https://github.com/aleclearmind/weekend-planner/releases/latest/download/weekend-planner-web-activities.png" alt="Activity ideas" width="210">
-  <img src="https://github.com/aleclearmind/weekend-planner/releases/latest/download/weekend-planner-web-people.png" alt="People cache" width="210">
-  <img src="https://github.com/aleclearmind/weekend-planner/releases/latest/download/weekend-planner-web-inbox.png" alt="RSS inbox" width="210">
+  <img src="https://github.com/aleclearmind/weekend-planner/releases/download/latest/weekend-planner-web-weekends.png" alt="Upcoming weekends" width="210">
+  <img src="https://github.com/aleclearmind/weekend-planner/releases/download/latest/weekend-planner-web-activities.png" alt="Activity ideas" width="210">
+  <img src="https://github.com/aleclearmind/weekend-planner/releases/download/latest/weekend-planner-web-people.png" alt="People cache" width="210">
+  <img src="https://github.com/aleclearmind/weekend-planner/releases/download/latest/weekend-planner-web-inbox.png" alt="RSS inbox" width="210">
 </p>
 
 ## What it does
 
 - Shows Friday night plus the morning, afternoon, and night slots for Saturday
-  and Sunday.
+  and Sunday, hiding days that have already passed in the current weekend.
 - Assigns compatible activity ideas across one or more consecutive slots.
 - Keeps a read-only activity view with every past and upcoming assignment.
-- Supports recurring activities with an optional desired frequency and
-  overdue warnings; recurrence never creates assignments automatically.
+- Supports recurring activities with an optional desired frequency, overdue
+  warnings, and a manual counter reset; recurrence never creates assignments
+  automatically.
 - Supports `anytime`, `within`, `between`, and `exact` activity date
   constraints. Dates are directly editable as `YYYY-MM-DD`, with quick
   deadlines for one week, one to three months, one year, and the next season.
-- Lets activities start at any time, or only in the morning, afternoon, or
-  night.
+  New activities default to `anytime`.
+- Lets activities optionally require a weekend day, a time of day, or both,
+  such as Friday night.
 - Tracks booking requirements and filters ideas that need booking.
 - Caches participant names locally and tracks possibly/interested/confirmed
   status. Cached people can be renamed or removed.
@@ -45,10 +47,11 @@ supplied Claude Design mockup and runs on Android and the web.
   beside otherwise available weekend slots. Calendar contents stay outside
   the planner database and its exports.
 
-The database schema is currently version `1`. The stored document carries that
+The database schema is currently version `2`. The stored document carries that
 version explicitly, and loading always runs through the migration pipeline.
-Schema versions are only incremented when a corresponding one-step migration
-has been added.
+Schema v1 remains untouched under its original storage key; the v1→v2
+migration writes a new v2 database with optional start-day and frequency-reset
+fields.
 
 CalDAV synchronization is deliberately left for a later iteration.
 
@@ -86,7 +89,7 @@ traces are available in Settings → Event log.
 The `web-smoke` derivation loads the Nix-built site in Playwright, navigates
 all four tabs, and emits deterministic phone-sized screenshots. The individual
 `web-screenshot-*` packages expose stable release artifact names, while the
-README follows them through GitHub's `releases/latest/download` URLs.
+README follows the rolling `latest` release tag.
 
 The ARM64 artifact is a release APK signed with Flutter's generated debug key,
 which is suitable for direct installation and testing but not app-store

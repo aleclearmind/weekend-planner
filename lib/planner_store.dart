@@ -37,9 +37,9 @@ class _FetchedFeed {
 class PlannerStore extends ChangeNotifier {
   PlannerStore._(this._preferences);
 
-  /// Do not increment this until an explicit schema bump is requested.
-  static const currentSchemaVersion = 1;
-  static const _storageKey = 'weekend_planner_state_v1';
+  static const currentSchemaVersion = 2;
+  static const _storageKey = 'weekend_planner_state_v2';
+  static const _legacyStorageKeyV1 = 'weekend_planner_state_v1';
   static const _maxLogEntries = 250;
   static const _browserUserAgent =
       'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 '
@@ -61,7 +61,9 @@ class PlannerStore extends ChangeNotifier {
   static Future<PlannerStore> load() async {
     final preferences = await SharedPreferences.getInstance();
     final store = PlannerStore._(preferences);
-    final encoded = preferences.getString(_storageKey);
+    final currentEncoded = preferences.getString(_storageKey);
+    final encoded =
+        currentEncoded ?? preferences.getString(_legacyStorageKeyV1);
     if (encoded == null) {
       await store._persist();
       return store;
@@ -69,10 +71,13 @@ class PlannerStore extends ChangeNotifier {
 
     try {
       final decoded = jsonDecode(encoded) as Map<String, dynamic>;
+      final sourceVersion = (decoded['schemaVersion'] as num?)?.toInt() ?? 1;
       final migrated = _migrateDatabase(decoded);
       store._restore(migrated);
       final samplesRemoved = store._removeLegacySampleData();
-      if (samplesRemoved || !decoded.containsKey('schemaVersion')) {
+      if (currentEncoded == null ||
+          sourceVersion != currentSchemaVersion ||
+          samplesRemoved) {
         await store._persist();
       }
     } on Object catch (error, stackTrace) {
@@ -89,7 +94,7 @@ class PlannerStore extends ChangeNotifier {
 
   /// Every future version must be added here as a one-step migration.
   static Map<String, dynamic> _migrateDatabase(Map<String, dynamic> source) {
-    final database = Map<String, dynamic>.from(source);
+    var database = Map<String, dynamic>.from(source);
     var version = (database['schemaVersion'] as num?)?.toInt() ?? 1;
     if (version > currentSchemaVersion) {
       throw FormatException(
@@ -98,11 +103,33 @@ class PlannerStore extends ChangeNotifier {
       );
     }
     while (version < currentSchemaVersion) {
-      // Add migrations as explicit steps:
-      // case 1: database = _migrateV1ToV2(database); version = 2;
-      throw StateError('No migration registered for database schema $version.');
+      switch (version) {
+        case 1:
+          database = _migrateV1ToV2(database);
+          version = 2;
+        default:
+          throw StateError(
+            'No migration registered for database schema $version.',
+          );
+      }
     }
     database['schemaVersion'] = currentSchemaVersion;
+    return database;
+  }
+
+  static Map<String, dynamic> _migrateV1ToV2(Map<String, dynamic> source) {
+    final database = Map<String, dynamic>.from(source);
+    final activities = source['activities'];
+    if (activities is List<dynamic>) {
+      database['activities'] = activities.map((rawActivity) {
+        if (rawActivity is! Map<String, dynamic>) return rawActivity;
+        final activity = Map<String, dynamic>.from(rawActivity);
+        activity['startDay'] = null;
+        activity['frequencyCounterResetAt'] = null;
+        return activity;
+      }).toList();
+    }
+    database['schemaVersion'] = 2;
     return database;
   }
 
@@ -147,28 +174,40 @@ class PlannerStore extends ChangeNotifier {
     return placements;
   }
 
-  String? frequencyWarning(ActivityIdea activity) {
+  String? frequencyWarning(ActivityIdea activity, {DateTime? now}) {
     final frequency = activity.desiredFrequencyWeeks;
     if (!activity.isRecurring || frequency == null) return null;
     final placements = placementsForActivity(activity.id);
-    final currentFriday = firstRelevantFriday(DateTime.now());
-    if (placements.any(
-      (placement) => !placement.friday.isBefore(currentFriday),
-    )) {
+    final currentFriday = firstRelevantFriday(now ?? DateTime.now());
+    final latestPlacement = placements.isEmpty ? null : placements.first.friday;
+    final counterReset = activity.frequencyCounterResetAt;
+    final resetFriday = counterReset == null
+        ? null
+        : firstRelevantFriday(counterReset);
+    final resetIsLatest =
+        resetFriday != null &&
+        (latestPlacement == null || resetFriday.isAfter(latestPlacement));
+    final reference = resetIsLatest ? resetFriday : latestPlacement;
+    if (reference != null && !reference.isBefore(currentFriday)) {
       return null;
     }
-    if (placements.isEmpty) {
+    if (reference == null) {
       return 'Not done yet · goal: ${activity.frequencyLabel!.toLowerCase()}';
     }
-    final latest = placements.first.friday;
-    final weekendsSince = currentFriday.difference(latest).inDays ~/ 7;
+    final weekendsSince = currentFriday.difference(reference).inDays ~/ 7;
     if (weekendsSince < frequency) return null;
-    return '$weekendsSince weekends since last time · '
+    final referenceLabel = resetIsLatest ? 'counter reset' : 'last time';
+    return '$weekendsSince weekends since $referenceLabel · '
         'goal: ${activity.frequencyLabel!.toLowerCase()}';
   }
 
   String? fitProblem(ActivityIdea activity, DateTime friday, int slotIndex) {
     final selectedSlot = WeekendSlot.all[slotIndex];
+    if (activity.startDay != null &&
+        activity.startDay != selectedSlot.weekendDay) {
+      return 'Starts on ${weekendDayLabel(activity.startDay!)}, not '
+          '${selectedSlot.day}.';
+    }
     if (activity.startPart != null && activity.startPart != selectedSlot.part) {
       return 'Starts a ${activity.startPart!.name}, not a '
           '${selectedSlot.part.name}.';
@@ -229,6 +268,19 @@ class PlannerStore extends ChangeNotifier {
   void deleteActivity(String id) {
     activities.removeWhere((activity) => activity.id == id);
     assignments.removeWhere((_, assignment) => assignment.activityId == id);
+    _changed();
+  }
+
+  void resetFrequencyCounter(String activityId, {DateTime? now}) {
+    final index = activities.indexWhere((item) => item.id == activityId);
+    if (index == -1) return;
+    final activity = activities[index];
+    if (!activity.isRecurring || activity.desiredFrequencyWeeks == null) {
+      return;
+    }
+    activities[index] = activity.copyWith(
+      frequencyCounterResetAt: firstRelevantFriday(now ?? DateTime.now()),
+    );
     _changed();
   }
 
@@ -376,6 +428,7 @@ class PlannerStore extends ChangeNotifier {
       name: normalizeAllCapsTitle(item.title),
       rangeKind: DateRangeKind.exact,
       firstDate: dateOnly(item.eventDate),
+      startDay: inferWeekendDay(item.eventDate),
       startPart: item.startPart,
       slotLength: item.slotLength,
       needsBooking: true,

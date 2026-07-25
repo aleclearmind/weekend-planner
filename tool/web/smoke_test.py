@@ -42,6 +42,7 @@ def activity(
     people: list[dict[str, str]],
     *,
     second_date: dt.date | None = None,
+    start_day: str | None = None,
     recurring: bool = False,
     frequency: int | None = None,
     location: dict[str, object] | None = None,
@@ -53,6 +54,7 @@ def activity(
         "rangeKind": range_kind,
         "firstDate": iso(first_date),
         "secondDate": iso(second_date) if second_date else None,
+        "startDay": start_day,
         "startPart": start_part,
         "slotLength": slot_length,
         "needsBooking": needs_booking,
@@ -62,6 +64,7 @@ def activity(
         "location": location,
         "url": url,
         "createdAt": f"{iso(first_date)}T10:00:00.000",
+        "frequencyCounterResetAt": None,
     }
 
 
@@ -77,7 +80,7 @@ luca = {"name": "Luca", "status": "interested"}
 marta = {"name": "Marta", "status": "possibly"}
 
 database = {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "activities": [
         activity(
             "jazz",
@@ -88,6 +91,7 @@ database = {
             1,
             True,
             [elena, luca],
+            start_day="friday",
             location={
                 "name": "Circolo Magnolia",
                 "latitude": 45.4617,
@@ -105,6 +109,7 @@ database = {
             2,
             False,
             [luca, marta],
+            start_day="saturday",
             location={
                 "name": "Val Masino",
                 "latitude": 46.215,
@@ -121,6 +126,7 @@ database = {
             1,
             False,
             [elena, luca, marta],
+            start_day="sunday",
             recurring=True,
             frequency=4,
         ),
@@ -215,7 +221,7 @@ init_script = (
     "Object.setPrototypeOf(FixedDate, OriginalDate);"
     "window.Date = FixedDate;"
     "window.localStorage.setItem("
-    + json.dumps("flutter.weekend_planner_state_v1")
+    + json.dumps("flutter.weekend_planner_state_v2")
     + ","
     + json.dumps(storage_value, ensure_ascii=False)
     + ");"

@@ -69,6 +69,27 @@ class ActivityDetailPage extends StatelessWidget {
               const SizedBox(height: 13),
               FrequencyWarningBadge(message: frequencyWarning),
             ],
+            if (activity.isRecurring &&
+                activity.desiredFrequencyWeeks != null) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    store.resetFrequencyCounter(activity.id);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Frequency counter reset from this weekend.',
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                  label: const Text('Reset counter'),
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
             _InfoCard(
               children: [

@@ -27,6 +27,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
   late DateRangeKind _rangeKind;
   late DateTime _firstDate;
   late DateTime _secondDate;
+  late WeekendDay? _startDay;
   late DayPart? _startPart;
   late int _slotLength;
   late bool _needsBooking;
@@ -54,7 +55,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
           '',
     );
     _urlController = TextEditingController(text: activity?.url ?? '');
-    _rangeKind = activity?.rangeKind ?? DateRangeKind.within;
+    _rangeKind = activity?.rangeKind ?? DateRangeKind.anytime;
     _firstDate = activity?.firstDate ?? addDays(now, 90);
     _secondDate =
         activity?.secondDate ??
@@ -63,6 +64,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
             : addDays(activity.firstDate, 30));
     _firstDateController = TextEditingController(text: isoDate(_firstDate));
     _secondDateController = TextEditingController(text: isoDate(_secondDate));
+    _startDay = activity?.startDay;
     _startPart = activity?.startPart;
     _slotLength = activity?.slotLength ?? 1;
     _needsBooking = activity?.needsBooking ?? false;
@@ -87,6 +89,17 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final timeSegments = _startDay == WeekendDay.friday
+        ? const [
+            ButtonSegment(value: 'any', label: Text('Any time')),
+            ButtonSegment(value: 'night', label: Text('Night')),
+          ]
+        : const [
+            ButtonSegment(value: 'any', label: Text('Any time')),
+            ButtonSegment(value: 'morning', label: Text('Morning')),
+            ButtonSegment(value: 'afternoon', label: Text('Afternoon')),
+            ButtonSegment(value: 'night', label: Text('Night')),
+          ];
     return Scaffold(
       appBar: AppBar(
         leading: const BackButton(),
@@ -174,14 +187,35 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
           Text(_rangePreview, style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 24),
           const SectionLabel('Starts on'),
+          Text('Weekend day', style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 6),
           SegmentedButton<String>(
             showSelectedIcon: false,
             segments: const [
-              ButtonSegment(value: 'any', label: Text('Any time')),
-              ButtonSegment(value: 'morning', label: Text('Morning')),
-              ButtonSegment(value: 'afternoon', label: Text('Afternoon')),
-              ButtonSegment(value: 'night', label: Text('Night')),
+              ButtonSegment(value: 'any', label: Text('Any')),
+              ButtonSegment(value: 'friday', label: Text('Fri')),
+              ButtonSegment(value: 'saturday', label: Text('Sat')),
+              ButtonSegment(value: 'sunday', label: Text('Sun')),
             ],
+            selected: {_startDay?.name ?? 'any'},
+            onSelectionChanged: (values) => setState(() {
+              final value = values.single;
+              _startDay = value == 'any'
+                  ? null
+                  : WeekendDay.values.byName(value);
+              if (_startDay == WeekendDay.friday &&
+                  _startPart != null &&
+                  _startPart != DayPart.night) {
+                _startPart = DayPart.night;
+              }
+            }),
+          ),
+          const SizedBox(height: 12),
+          Text('Time of day', style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 6),
+          SegmentedButton<String>(
+            showSelectedIcon: false,
+            segments: timeSegments,
             selected: {_startPart?.name ?? 'any'},
             onSelectionChanged: (values) => setState(() {
               final value = values.single;
@@ -434,7 +468,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
       _nextSeasonDeadline(dateOnly(DateTime.now()));
 
   String get _slotPreview {
-    final start = _startPart == null ? 'any time' : 'a ${_startPart!.name}';
+    final start = activityStartLabel(_startDay, _startPart);
     return 'Starts $start, lasts $_slotLength '
         '${_slotLength == 1 ? 'slot' : 'slots'}';
   }
@@ -593,6 +627,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
         secondDate: _rangeKind == DateRangeKind.between
             ? dateOnly(secondDate!)
             : null,
+        startDay: _startDay,
         startPart: _startPart,
         slotLength: _slotLength,
         needsBooking: _needsBooking,
@@ -604,6 +639,9 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
         location: location,
         url: urlText.isEmpty ? null : urlText,
         createdAt: widget.activity?.createdAt ?? DateTime.now(),
+        frequencyCounterResetAt: _isRecurring && _hasFrequency
+            ? widget.activity?.frequencyCounterResetAt
+            : null,
       ),
     );
     Navigator.pop(context, _editing ? 'updated' : 'created');

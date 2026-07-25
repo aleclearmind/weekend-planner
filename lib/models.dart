@@ -2,27 +2,41 @@ enum DateRangeKind { anytime, within, between, exact }
 
 enum DayPart { morning, afternoon, night }
 
+enum WeekendDay { friday, saturday, sunday }
+
 enum InterestStatus { possibly, interested, confirmed }
 
 class WeekendSlot {
-  const WeekendSlot(this.day, this.part, this.dayOffset);
+  const WeekendSlot(this.weekendDay, this.part);
 
-  final String day;
+  final WeekendDay weekendDay;
   final DayPart part;
-  final int dayOffset;
 
+  String get day => weekendDayLabel(weekendDay);
+  int get dayOffset => weekendDay.index;
   String get partLabel => part.name;
 
   static const all = <WeekendSlot>[
-    WeekendSlot('Friday', DayPart.night, 0),
-    WeekendSlot('Saturday', DayPart.morning, 1),
-    WeekendSlot('Saturday', DayPart.afternoon, 1),
-    WeekendSlot('Saturday', DayPart.night, 1),
-    WeekendSlot('Sunday', DayPart.morning, 2),
-    WeekendSlot('Sunday', DayPart.afternoon, 2),
-    WeekendSlot('Sunday', DayPart.night, 2),
+    WeekendSlot(WeekendDay.friday, DayPart.night),
+    WeekendSlot(WeekendDay.saturday, DayPart.morning),
+    WeekendSlot(WeekendDay.saturday, DayPart.afternoon),
+    WeekendSlot(WeekendDay.saturday, DayPart.night),
+    WeekendSlot(WeekendDay.sunday, DayPart.morning),
+    WeekendSlot(WeekendDay.sunday, DayPart.afternoon),
+    WeekendSlot(WeekendDay.sunday, DayPart.night),
   ];
 }
+
+String weekendDayLabel(WeekendDay day) =>
+    '${day.name[0].toUpperCase()}${day.name.substring(1)}';
+
+String activityStartLabel(WeekendDay? day, DayPart? part) =>
+    switch ((day, part)) {
+      (null, null) => 'any time',
+      (final day?, null) => weekendDayLabel(day),
+      (null, final part?) => 'a ${part.name}',
+      (final day?, final part?) => '${weekendDayLabel(day)} ${part.name}',
+    };
 
 class Participant {
   const Participant({required this.name, required this.status});
@@ -87,6 +101,7 @@ class ActivityIdea {
     required this.rangeKind,
     required this.firstDate,
     this.secondDate,
+    this.startDay,
     required this.startPart,
     required this.slotLength,
     required this.needsBooking,
@@ -96,6 +111,7 @@ class ActivityIdea {
     this.location,
     this.url,
     this.createdAt,
+    this.frequencyCounterResetAt,
   });
 
   final String id;
@@ -104,7 +120,10 @@ class ActivityIdea {
   final DateTime firstDate;
   final DateTime? secondDate;
 
-  /// Null means the activity may start in any weekend slot.
+  /// Null means the activity may start on any day of the weekend.
+  final WeekendDay? startDay;
+
+  /// Null means the activity may start at any available time of day.
   final DayPart? startPart;
   final int slotLength;
   final bool needsBooking;
@@ -114,6 +133,7 @@ class ActivityIdea {
   final ActivityLocation? location;
   final String? url;
   final DateTime? createdAt;
+  final DateTime? frequencyCounterResetAt;
 
   ActivityIdea copyWith({
     String? id,
@@ -122,6 +142,8 @@ class ActivityIdea {
     DateTime? firstDate,
     DateTime? secondDate,
     bool clearSecondDate = false,
+    WeekendDay? startDay,
+    bool useAnyStartDay = false,
     DayPart? startPart,
     bool useAnyStart = false,
     int? slotLength,
@@ -135,12 +157,15 @@ class ActivityIdea {
     String? url,
     bool clearUrl = false,
     DateTime? createdAt,
+    DateTime? frequencyCounterResetAt,
+    bool clearFrequencyCounterReset = false,
   }) => ActivityIdea(
     id: id ?? this.id,
     name: name ?? this.name,
     rangeKind: rangeKind ?? this.rangeKind,
     firstDate: firstDate ?? this.firstDate,
     secondDate: clearSecondDate ? null : secondDate ?? this.secondDate,
+    startDay: useAnyStartDay ? null : startDay ?? this.startDay,
     startPart: useAnyStart ? null : startPart ?? this.startPart,
     slotLength: slotLength ?? this.slotLength,
     needsBooking: needsBooking ?? this.needsBooking,
@@ -152,6 +177,9 @@ class ActivityIdea {
     location: clearLocation ? null : location ?? this.location,
     url: clearUrl ? null : url ?? this.url,
     createdAt: createdAt ?? this.createdAt,
+    frequencyCounterResetAt: clearFrequencyCounterReset
+        ? null
+        : frequencyCounterResetAt ?? this.frequencyCounterResetAt,
   );
 
   bool isAvailableAt(DateTime startDate) {
@@ -177,7 +205,7 @@ class ActivityIdea {
   };
 
   String get slotLabel {
-    final start = startPart == null ? 'any time' : 'a ${startPart!.name}';
+    final start = activityStartLabel(startDay, startPart);
     return 'Starts $start, lasts $slotLength '
         '${slotLength == 1 ? 'slot' : 'slots'}';
   }
@@ -193,6 +221,7 @@ class ActivityIdea {
     'rangeKind': rangeKind.name,
     'firstDate': isoDate(firstDate),
     'secondDate': secondDate == null ? null : isoDate(secondDate!),
+    'startDay': startDay?.name,
     'startPart': startPart?.name,
     'slotLength': slotLength,
     'needsBooking': needsBooking,
@@ -202,9 +231,13 @@ class ActivityIdea {
     'location': location?.toJson(),
     'url': url,
     'createdAt': createdAt?.toIso8601String(),
+    'frequencyCounterResetAt': frequencyCounterResetAt == null
+        ? null
+        : isoDate(frequencyCounterResetAt!),
   };
 
   factory ActivityIdea.fromJson(Map<String, dynamic> json) {
+    final rawStartDay = json['startDay'];
     final rawStart = json['startPart'];
     return ActivityIdea(
       id: json['id'] as String,
@@ -217,6 +250,9 @@ class ActivityIdea {
       firstDate:
           _tryParseIsoDate(json['firstDate']) ?? dateOnly(DateTime.now()),
       secondDate: _tryParseIsoDate(json['secondDate']),
+      startDay: rawStartDay == null
+          ? null
+          : _enumByName(WeekendDay.values, rawStartDay, WeekendDay.friday),
       startPart: rawStart == null
           ? null
           : _enumByName(DayPart.values, rawStart, DayPart.night),
@@ -233,6 +269,9 @@ class ActivityIdea {
           : null,
       url: _nonEmpty(json['url'] as String?),
       createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
+      frequencyCounterResetAt: _tryParseIsoDate(
+        json['frequencyCounterResetAt'],
+      ),
     );
   }
 }
@@ -529,6 +568,13 @@ DayPart inferDayPart(DateTime date) {
   if (date.hour < 18) return DayPart.afternoon;
   return DayPart.night;
 }
+
+WeekendDay? inferWeekendDay(DateTime date) => switch (date.weekday) {
+  DateTime.friday => WeekendDay.friday,
+  DateTime.saturday => WeekendDay.saturday,
+  DateTime.sunday => WeekendDay.sunday,
+  _ => null,
+};
 
 String normalizeAllCapsTitle(String input) {
   final title = input.trim().replaceAll(RegExp(r'\s+'), ' ');

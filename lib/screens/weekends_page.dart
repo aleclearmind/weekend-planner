@@ -8,9 +8,10 @@ import 'activity_detail_page.dart';
 import 'activity_picker_page.dart';
 
 class WeekendsPage extends StatefulWidget {
-  const WeekendsPage({required this.store, super.key});
+  const WeekendsPage({required this.store, this.now, super.key});
 
   final PlannerStore store;
+  final DateTime? now;
 
   @override
   State<WeekendsPage> createState() => _WeekendsPageState();
@@ -29,7 +30,9 @@ class _WeekendsPageState extends State<WeekendsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final firstFriday = firstRelevantFriday(DateTime.now());
+    final now = widget.now ?? DateTime.now();
+    final today = dateOnly(now);
+    final firstFriday = firstRelevantFriday(now);
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(20, 2, 20, 28),
       itemCount: _weeksShown + 1,
@@ -54,6 +57,7 @@ class _WeekendsPageState extends State<WeekendsPage> {
         return _WeekendSection(
           store: widget.store,
           friday: friday,
+          today: today,
           weekendIndex: weekendIndex,
           onOpenPicker: (slotIndex) => _openPicker(friday, slotIndex),
           onOpenActivity: _openActivity,
@@ -108,6 +112,7 @@ class _WeekendSection extends StatelessWidget {
   const _WeekendSection({
     required this.store,
     required this.friday,
+    required this.today,
     required this.weekendIndex,
     required this.onOpenPicker,
     required this.onOpenActivity,
@@ -116,6 +121,7 @@ class _WeekendSection extends StatelessWidget {
 
   final PlannerStore store;
   final DateTime friday;
+  final DateTime today;
   final int weekendIndex;
   final ValueChanged<int> onOpenPicker;
   final ValueChanged<ActivityIdea> onOpenActivity;
@@ -124,6 +130,15 @@ class _WeekendSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sunday = addDays(friday, 2);
+    final days = [
+      (name: 'Friday', date: friday, slotIndexes: const [0]),
+      (
+        name: 'Saturday',
+        date: addDays(friday, 1),
+        slotIndexes: const [1, 2, 3],
+      ),
+      (name: 'Sunday', date: sunday, slotIndexes: const [4, 5, 6]),
+    ].where((day) => !day.date.isBefore(today)).toList();
     final label = switch (weekendIndex) {
       0 => 'This weekend',
       1 => 'Next weekend',
@@ -157,38 +172,20 @@ class _WeekendSection extends StatelessWidget {
               ],
             ),
           ),
-          _DayGroup(
-            name: 'Friday',
-            date: friday,
-            slotIndexes: const [0],
-            store: store,
-            weekendFriday: friday,
-            onOpenPicker: onOpenPicker,
-            onOpenActivity: onOpenActivity,
-            onClear: onClear,
-          ),
-          const SizedBox(height: 13),
-          _DayGroup(
-            name: 'Saturday',
-            date: addDays(friday, 1),
-            slotIndexes: const [1, 2, 3],
-            store: store,
-            weekendFriday: friday,
-            onOpenPicker: onOpenPicker,
-            onOpenActivity: onOpenActivity,
-            onClear: onClear,
-          ),
-          const SizedBox(height: 13),
-          _DayGroup(
-            name: 'Sunday',
-            date: sunday,
-            slotIndexes: const [4, 5, 6],
-            store: store,
-            weekendFriday: friday,
-            onOpenPicker: onOpenPicker,
-            onOpenActivity: onOpenActivity,
-            onClear: onClear,
-          ),
+          for (var position = 0; position < days.length; position++) ...[
+            if (position > 0) const SizedBox(height: 13),
+            _DayGroup(
+              key: ValueKey('weekend-day-${isoDate(days[position].date)}'),
+              name: days[position].name,
+              date: days[position].date,
+              slotIndexes: days[position].slotIndexes,
+              store: store,
+              weekendFriday: friday,
+              onOpenPicker: onOpenPicker,
+              onOpenActivity: onOpenActivity,
+              onClear: onClear,
+            ),
+          ],
         ],
       ),
     );
@@ -197,6 +194,7 @@ class _WeekendSection extends StatelessWidget {
 
 class _DayGroup extends StatelessWidget {
   const _DayGroup({
+    super.key,
     required this.name,
     required this.date,
     required this.slotIndexes,
