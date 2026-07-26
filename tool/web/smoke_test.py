@@ -38,9 +38,9 @@ def activity(
     first_date: dt.date,
     start_part: str | None,
     slot_length: int,
-    needs_booking: bool,
     people: list[dict[str, str]],
     *,
+    tags: list[str] | None = None,
     second_date: dt.date | None = None,
     start_day: str | None = None,
     recurring: bool = False,
@@ -57,8 +57,8 @@ def activity(
         "startDay": start_day,
         "startPart": start_part,
         "slotLength": slot_length,
-        "needsBooking": needs_booking,
         "people": people,
+        "tags": tags or [],
         "isRecurring": recurring,
         "desiredFrequencyWeeks": frequency,
         "location": location,
@@ -79,7 +79,7 @@ luca = {"name": "Luca", "status": "interested"}
 marta = {"name": "Marta", "status": "possibly"}
 
 database = {
-    "schemaVersion": 3,
+    "schemaVersion": 5,
     "activities": [
         activity(
             "jazz",
@@ -88,8 +88,8 @@ database = {
             friday,
             "night",
             1,
-            True,
             [elena, luca],
+            tags=["Booking", "Music"],
             start_day="friday",
             location={
                 "name": "Circolo Magnolia",
@@ -106,8 +106,8 @@ database = {
             spring_deadline,
             "morning",
             2,
-            False,
             [luca, marta],
+            tags=["Outdoors"],
             start_day="saturday",
             location={
                 "name": "Val Masino",
@@ -123,8 +123,8 @@ database = {
             today,
             "afternoon",
             1,
-            False,
             [elena, luca, marta],
+            tags=["Friends"],
             start_day="sunday",
             recurring=True,
             frequency=4,
@@ -136,8 +136,8 @@ database = {
             today,
             "night",
             1,
-            False,
             [elena],
+            tags=["Film"],
             second_date=spring_deadline,
         ),
     ],
@@ -258,7 +258,7 @@ init_script = (
     "Object.setPrototypeOf(FixedDate, OriginalDate);"
     "window.Date = FixedDate;"
     "window.localStorage.setItem("
-    + json.dumps("flutter.weekend_planner_state_v3")
+    + json.dumps("flutter.weekend_planner_state_v5")
     + ","
     + json.dumps(storage_value, ensure_ascii=False)
     + ");"

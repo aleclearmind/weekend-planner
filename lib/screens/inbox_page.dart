@@ -18,14 +18,15 @@ class InboxPage extends StatefulWidget {
 }
 
 class _InboxPageState extends State<InboxPage> {
-  String? _feedFilter;
+  final Set<String> _disabledFeedIds = {};
 
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
-    final selectedFeed = store.feeds.any((feed) => feed.id == _feedFilter)
-        ? _feedFilter
-        : null;
+    final activeFeedIds = store.feeds
+        .where((feed) => !_disabledFeedIds.contains(feed.id))
+        .map((feed) => feed.id)
+        .toSet();
     final currentInbox = store.inbox
         .where(
           (item) =>
@@ -33,9 +34,14 @@ class _InboxPageState extends State<InboxPage> {
         )
         .toList();
     final visible = currentInbox
-        .where((item) => selectedFeed == null || item.feedId == selectedFeed)
+        .where((item) => activeFeedIds.contains(item.feedId))
         .toList();
     final pending = visible.where((item) => !item.imported).length;
+    final sourceSummary = activeFeedIds.length == store.feeds.length
+        ? '$pending new from ${store.feeds.length} '
+              '${store.feeds.length == 1 ? 'feed' : 'feeds'}'
+        : '$pending new from ${activeFeedIds.length} of '
+              '${store.feeds.length} sources';
     return Column(
       children: [
         Padding(
@@ -46,8 +52,7 @@ class _InboxPageState extends State<InboxPage> {
                 child: Text(
                   store.feeds.isEmpty
                       ? 'Connect a venue feed to start an inbox'
-                      : '$pending new from ${store.feeds.length} '
-                            '${store.feeds.length == 1 ? 'feed' : 'feeds'}',
+                      : sourceSummary,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
@@ -59,26 +64,33 @@ class _InboxPageState extends State<InboxPage> {
             ],
           ),
         ),
-        if (store.feeds.length > 1)
+        if (store.feeds.isNotEmpty)
           SizedBox(
-            height: 43,
+            height: 45,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               children: [
-                ChoiceChip(
-                  showCheckmark: false,
-                  label: const Text('All sources'),
-                  selected: selectedFeed == null,
-                  onSelected: (_) => setState(() => _feedFilter = null),
-                ),
-                const SizedBox(width: 7),
                 for (final feed in store.feeds) ...[
-                  ChoiceChip(
-                    showCheckmark: false,
-                    label: Text(feed.name),
-                    selected: selectedFeed == feed.id,
-                    onSelected: (_) => setState(() => _feedFilter = feed.id),
+                  _SourceFilterButton(
+                    feed: feed,
+                    selected: activeFeedIds.contains(feed.id),
+                    onToggle: () => setState(() {
+                      if (activeFeedIds.contains(feed.id)) {
+                        _disabledFeedIds.add(feed.id);
+                      } else {
+                        _disabledFeedIds.remove(feed.id);
+                      }
+                    }),
+                    onOnly: () => setState(() {
+                      _disabledFeedIds
+                        ..clear()
+                        ..addAll(
+                          store.feeds
+                              .where((candidate) => candidate.id != feed.id)
+                              .map((candidate) => candidate.id),
+                        );
+                    }),
                   ),
                   const SizedBox(width: 7),
                 ],
@@ -111,11 +123,15 @@ class _InboxPageState extends State<InboxPage> {
               : visible.isEmpty
               ? EmptyState(
                   icon: Icons.filter_alt_off_outlined,
-                  title: 'No entries from this source',
-                  message: 'Choose another source or refresh the feed.',
+                  title: activeFeedIds.isEmpty
+                      ? 'No sources selected'
+                      : 'No entries from selected sources',
+                  message: activeFeedIds.isEmpty
+                      ? 'Enable at least one source to see its events.'
+                      : 'Enable another source or refresh the feeds.',
                   action: OutlinedButton(
-                    onPressed: () => setState(() => _feedFilter = null),
-                    child: const Text('Show all sources'),
+                    onPressed: () => setState(_disabledFeedIds.clear),
+                    child: const Text('Enable all sources'),
                   ),
                 )
               : RefreshIndicator(
@@ -184,7 +200,7 @@ class _InboxPageState extends State<InboxPage> {
   }
 
   Future<void> _refresh(BuildContext context) async {
-    final result = await widget.store.refreshFeeds(onlyFeedId: _feedFilter);
+    final result = await widget.store.refreshFeeds();
     if (!context.mounted) return;
     final message = result.errors.isNotEmpty
         ? result.errors.join('\n')
@@ -202,6 +218,71 @@ class _InboxPageState extends State<InboxPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _SourceFilterButton extends StatelessWidget {
+  const _SourceFilterButton({
+    required this.feed,
+    required this.selected,
+    required this.onToggle,
+    required this.onOnly,
+  });
+
+  final RssFeed feed;
+  final bool selected;
+  final VoidCallback onToggle;
+  final VoidCallback onOnly;
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground = selected ? AppColors.primaryDark : AppColors.muted;
+    return Material(
+      color: selected ? AppColors.primaryContainer : Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(9),
+        side: const BorderSide(color: AppColors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            key: ValueKey('source-toggle-${feed.id}'),
+            onTap: onToggle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+              child: Text(
+                feed.name,
+                style: TextStyle(
+                  color: foreground,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+          ),
+          Container(width: 1, height: 22, color: AppColors.border),
+          Tooltip(
+            message: 'Show only ${feed.name}',
+            child: InkWell(
+              key: ValueKey('source-only-${feed.id}'),
+              onTap: onOnly,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+                child: Text(
+                  'Only',
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

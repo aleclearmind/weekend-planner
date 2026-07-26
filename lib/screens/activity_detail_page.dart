@@ -52,7 +52,6 @@ class ActivityDetailPage extends StatelessWidget {
               spacing: 7,
               runSpacing: 7,
               children: [
-                if (activity.needsBooking) const BookingBadge(),
                 if (activity.isRecurring)
                   const _DetailBadge(
                     icon: Icons.repeat_rounded,
@@ -104,13 +103,6 @@ class ActivityDetailPage extends StatelessWidget {
                   icon: Icons.view_timeline_outlined,
                   label: 'Slots',
                   value: activity.slotLabel,
-                ),
-                _InfoRow(
-                  icon: Icons.event_available_rounded,
-                  label: 'Planning',
-                  value: activity.needsBooking
-                      ? 'Needs booking'
-                      : 'No booking needed',
                 ),
               ],
             ),

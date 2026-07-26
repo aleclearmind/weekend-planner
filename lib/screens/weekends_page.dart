@@ -85,11 +85,7 @@ class _WeekendsPageState extends State<WeekendsPage> {
       ),
     );
     if (activity == null || !mounted) return;
-    _showMessage(
-      activity.needsBooking
-          ? '${activity.name} assigned — remember to book it.'
-          : '${activity.name} assigned.',
-    );
+    _showMessage('${activity.name} assigned.');
   }
 
   Future<void> _openActivity(ActivityIdea activity) async {

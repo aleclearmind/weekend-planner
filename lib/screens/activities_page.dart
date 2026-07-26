@@ -22,7 +22,6 @@ class ActivitiesPage extends StatefulWidget {
 }
 
 class _ActivitiesPageState extends State<ActivitiesPage> {
-  bool _bookingOnly = false;
   String? _tagFilter;
 
   @override
@@ -34,34 +33,22 @@ class _ActivitiesPageState extends State<ActivitiesPage> {
     final activities = widget.store.activities
         .where(
           (activity) =>
-              (!_bookingOnly || activity.needsBooking) &&
-              (selectedTag == null ||
-                  activity.tags.any(
-                    (tag) => tag.toLowerCase() == selectedTag.toLowerCase(),
-                  )),
+              selectedTag == null ||
+              activity.tags.any(
+                (tag) => tag.toLowerCase() == selectedTag.toLowerCase(),
+              ),
         )
         .toList();
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '${widget.store.activities.length} ideas ready for a '
-                  'free slot',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-              FilterChip(
-                selected: _bookingOnly,
-                showCheckmark: false,
-                avatar: const Icon(Icons.event_note_rounded, size: 17),
-                label: const Text('Needs booking'),
-                onSelected: (value) => setState(() => _bookingOnly = value),
-              ),
-            ],
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '${widget.store.activities.length} ideas ready for a free slot',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
         ),
         if (tags.isNotEmpty)
@@ -93,22 +80,19 @@ class _ActivitiesPageState extends State<ActivitiesPage> {
         Expanded(
           child: activities.isEmpty
               ? EmptyState(
-                  icon: _bookingOnly || selectedTag != null
+                  icon: selectedTag != null
                       ? Icons.event_available_rounded
                       : Icons.lightbulb_outline_rounded,
-                  title: _bookingOnly || selectedTag != null
+                  title: selectedTag != null
                       ? 'No matching activities'
                       : 'No activity ideas yet',
-                  message: _bookingOnly || selectedTag != null
+                  message: selectedTag != null
                       ? 'Clear the filters to see every activity idea.'
                       : 'Save things you would enjoy, then assign them to '
                             'planner slots.',
-                  action: _bookingOnly || selectedTag != null
+                  action: selectedTag != null
                       ? OutlinedButton(
-                          onPressed: () => setState(() {
-                            _bookingOnly = false;
-                            _tagFilter = null;
-                          }),
+                          onPressed: () => setState(() => _tagFilter = null),
                           child: const Text('Clear filters'),
                         )
                       : FilledButton.icon(
@@ -224,10 +208,6 @@ class _ActivityCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (activity.needsBooking) ...[
-                  const SizedBox(width: 8),
-                  const BookingBadge(),
-                ],
                 if (activity.isRecurring) ...[
                   const SizedBox(width: 7),
                   const Icon(

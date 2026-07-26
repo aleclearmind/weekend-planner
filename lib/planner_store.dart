@@ -61,8 +61,9 @@ class _DiscoveredFeedLink {
 class PlannerStore extends ChangeNotifier {
   PlannerStore._(this._preferences, this._httpClient);
 
-  static const currentSchemaVersion = 4;
-  static const _storageKey = 'weekend_planner_state_v4';
+  static const currentSchemaVersion = 5;
+  static const _storageKey = 'weekend_planner_state_v5';
+  static const _legacyStorageKeyV4 = 'weekend_planner_state_v4';
   static const _legacyStorageKeyV3 = 'weekend_planner_state_v3';
   static const _legacyStorageKeyV2 = 'weekend_planner_state_v2';
   static const _legacyStorageKeyV1 = 'weekend_planner_state_v1';
@@ -98,6 +99,7 @@ class PlannerStore extends ChangeNotifier {
     final currentEncoded = preferences.getString(_storageKey);
     final encoded =
         currentEncoded ??
+        preferences.getString(_legacyStorageKeyV4) ??
         preferences.getString(_legacyStorageKeyV3) ??
         preferences.getString(_legacyStorageKeyV2) ??
         preferences.getString(_legacyStorageKeyV1);
@@ -152,6 +154,9 @@ class PlannerStore extends ChangeNotifier {
         case 3:
           database = _migrateV3ToV4(database);
           version = 4;
+        case 4:
+          database = _migrateV4ToV5(database);
+          version = 5;
         default:
           throw StateError(
             'No migration registered for database schema $version.',
@@ -265,6 +270,19 @@ class PlannerStore extends ChangeNotifier {
       }).toList();
     }
     database['schemaVersion'] = 4;
+    return database;
+  }
+
+  static Map<String, dynamic> _migrateV4ToV5(Map<String, dynamic> source) {
+    final database = Map<String, dynamic>.from(source);
+    final activities = source['activities'];
+    if (activities is List<dynamic>) {
+      database['activities'] = activities.map((rawActivity) {
+        if (rawActivity is! Map<String, dynamic>) return rawActivity;
+        return Map<String, dynamic>.from(rawActivity)..remove('needsBooking');
+      }).toList();
+    }
+    database['schemaVersion'] = 5;
     return database;
   }
 
@@ -670,7 +688,6 @@ class PlannerStore extends ChangeNotifier {
       startDay: inferWeekDay(item.eventDate),
       startPart: item.startPart,
       slotLength: item.slotLength,
-      needsBooking: true,
       people: const [],
       location: item.locationName == null
           ? null

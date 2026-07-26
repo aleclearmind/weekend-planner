@@ -28,7 +28,8 @@ Claude Design mockup and runs on Android and the web.
   New activities default to `anytime`.
 - Lets activities optionally require any day of the week, a time of day, or
   both, such as Friday night or Wednesday night.
-- Tracks booking requirements and filters ideas that need booking.
+- Autocompletes reusable activity tags and filters ideas by tag both in the
+  activity list and while choosing an activity for a slot.
 - Caches participant names locally and tracks possibly/interested/confirmed
   status. Cached people can be added directly from the People tab, renamed, or
   removed.
@@ -38,8 +39,9 @@ Claude Design mockup and runs on Android and the web.
 - Adds RSS, Atom, and iCalendar (`.ics`) feeds and imports entries as editable
   activities. HTML autodiscovery also recognizes linked calendar feeds.
 - Normalizes all-caps RSS titles, carries the entry URL into the activity,
-  opens the editor immediately after import, and filters the inbox by source.
-  Inbox entries open into a read-only detail view. The compact inbox hides past
+  opens the editor immediately after import, and filters the inbox with
+  independently selectable sources and per-source “Only” actions. Inbox
+  entries open into a read-only detail view. The compact inbox hides past
   events, includes available locations, truncates previews to one line, groups
   entries by week, and decodes bytes according to their declared encoding.
 - Infers RSS event dates from explicit event fields, dates written in the
@@ -58,12 +60,13 @@ Claude Design mockup and runs on Android and the web.
   event beside otherwise available slots. Calendar contents stay outside the
   planner database and its exports.
 
-The database schema is currently version `3`. The stored document carries that
+The database schema is currently version `5`. The stored document carries that
 version explicitly, and loading always runs through the migration pipeline.
-Schema v1 and v2 remain untouched under their original storage keys. The
+Every older schema remains untouched under its original storage key. The
 v2→v3 migration converts numeric weekend assignment positions to stable
-date/time keys, records configurable weekly slots, feed kinds, and Android
-calendar filters.
+date/time keys and adds configurable weekly slots, feed kinds, and Android
+calendar filters. Schema v4 adds activity tags; schema v5 removes the former
+booking flag without converting it into a tag.
 
 CalDAV synchronization is deliberately left for a later iteration.
 

@@ -118,7 +118,6 @@ class ActivityIdea {
     this.startDay,
     required this.startPart,
     required this.slotLength,
-    required this.needsBooking,
     required this.people,
     this.tags = const [],
     this.isRecurring = false,
@@ -141,7 +140,6 @@ class ActivityIdea {
   /// Null means the activity may start at any available time of day.
   final DayPart? startPart;
   final int slotLength;
-  final bool needsBooking;
   final List<Participant> people;
   final List<String> tags;
   final bool isRecurring;
@@ -163,7 +161,6 @@ class ActivityIdea {
     DayPart? startPart,
     bool useAnyStart = false,
     int? slotLength,
-    bool? needsBooking,
     List<Participant>? people,
     List<String>? tags,
     bool? isRecurring,
@@ -185,7 +182,6 @@ class ActivityIdea {
     startDay: useAnyStartDay ? null : startDay ?? this.startDay,
     startPart: useAnyStart ? null : startPart ?? this.startPart,
     slotLength: slotLength ?? this.slotLength,
-    needsBooking: needsBooking ?? this.needsBooking,
     people: people ?? this.people,
     tags: tags ?? this.tags,
     isRecurring: isRecurring ?? this.isRecurring,
@@ -242,7 +238,6 @@ class ActivityIdea {
     'startDay': startDay?.name,
     'startPart': startPart?.name,
     'slotLength': slotLength,
-    'needsBooking': needsBooking,
     'people': people.map((person) => person.toJson()).toList(),
     'tags': tags,
     'isRecurring': isRecurring,
@@ -276,7 +271,6 @@ class ActivityIdea {
           ? null
           : _enumByName(DayPart.values, rawStart, DayPart.night),
       slotLength: (json['slotLength'] as num?)?.toInt() ?? 1,
-      needsBooking: json['needsBooking'] as bool? ?? false,
       people: (json['people'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(Participant.fromJson)

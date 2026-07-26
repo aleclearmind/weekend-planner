@@ -78,6 +78,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('activity tags autocomplete from existing activities', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PlannerStore.load();
+    store.activities.add(
+      ActivityIdea(
+        id: 'hike',
+        name: 'Mountain hike',
+        rangeKind: DateRangeKind.anytime,
+        firstDate: DateTime(2026, 7, 26),
+        startPart: DayPart.morning,
+        slotLength: 2,
+        people: const [],
+        tags: const ['Outdoors'],
+      ),
+    );
+
+    await tester.pumpWidget(MaterialApp(home: ActivityFormPage(store: store)));
+    await tester.pumpAndSettle();
+
+    final tagField = find.ancestor(
+      of: find.byIcon(Icons.tag_rounded).first,
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(tagField, 'out');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Outdoors'), findsOneWidget);
+    await tester.tap(find.text('Outdoors'));
+    await tester.pumpAndSettle();
+    expect(find.text('#Outdoors'), findsOneWidget);
+  });
+
   testWidgets('activity picker assigns by tapping the whole entry', (
     tester,
   ) async {
@@ -95,7 +129,6 @@ void main() {
         firstDate: dateOnly(DateTime.now()),
         startPart: null,
         slotLength: 1,
-        needsBooking: false,
         people: const [],
       ),
     );
@@ -118,9 +151,64 @@ void main() {
     expect(store.assignmentAt(weekStart, 0)?.activityId, 'walk');
   });
 
+  testWidgets('activity picker filters ideas by tag', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PlannerStore.load();
+    final weekStart = firstRelevantWeekStart(
+      DateTime.now(),
+      store.enabledSlots,
+    );
+    store.activities.addAll([
+      ActivityIdea(
+        id: 'walk',
+        name: 'Long walk',
+        rangeKind: DateRangeKind.anytime,
+        firstDate: dateOnly(DateTime.now()),
+        startPart: null,
+        slotLength: 1,
+        people: const [],
+        tags: const ['Outdoors'],
+      ),
+      ActivityIdea(
+        id: 'concert',
+        name: 'Live concert',
+        rangeKind: DateRangeKind.anytime,
+        firstDate: dateOnly(DateTime.now()),
+        startPart: null,
+        slotLength: 1,
+        people: const [],
+        tags: const ['Music'],
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ActivityPickerPage(
+          store: store,
+          weekStart: weekStart,
+          slotIndex: 0,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('#Music').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Live concert'), findsOneWidget);
+    expect(find.text('Long walk'), findsNothing);
+  });
+
   testWidgets('RSS inbox is compact and grouped by week', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final store = await PlannerStore.load();
+    store.feeds.add(
+      const RssFeed(
+        id: 'feed',
+        name: 'ARCI Bellezza',
+        url: 'https://arcibellezza.it/feed/',
+      ),
+    );
     final currentWeek = addDays(
       dateOnly(DateTime.now()),
       1 - DateTime.now().weekday,
@@ -184,6 +272,70 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('feed sources are independently selectable with an only action', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PlannerStore.load();
+    final eventDate = addDays(dateOnly(DateTime.now()), 7);
+    store.feeds.addAll([
+      const RssFeed(
+        id: 'arci',
+        name: 'ARCI',
+        url: 'https://example.com/arci.xml',
+      ),
+      const RssFeed(
+        id: 'magnolia',
+        name: 'Magnolia',
+        url: 'https://example.com/magnolia.xml',
+      ),
+    ]);
+    store.inbox.addAll([
+      RssInboxItem(
+        id: 'arci-event',
+        feedId: 'arci',
+        source: 'ARCI',
+        title: 'ARCI event',
+        link: 'https://example.com/arci-event',
+        eventDate: eventDate,
+        startPart: DayPart.night,
+        slotLength: 1,
+      ),
+      RssInboxItem(
+        id: 'magnolia-event',
+        feedId: 'magnolia',
+        source: 'Magnolia',
+        title: 'Magnolia event',
+        link: 'https://example.com/magnolia-event',
+        eventDate: eventDate,
+        startPart: DayPart.night,
+        slotLength: 1,
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: InboxPage(store: store)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('All sources'), findsNothing);
+    expect(find.text('Only'), findsNWidgets(2));
+    expect(find.text('ARCI event'), findsOneWidget);
+    expect(find.text('Magnolia event'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('source-toggle-arci')));
+    await tester.pumpAndSettle();
+    expect(find.text('ARCI event'), findsNothing);
+    expect(find.text('Magnolia event'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('source-only-arci')));
+    await tester.pumpAndSettle();
+    expect(find.text('ARCI event'), findsOneWidget);
+    expect(find.text('Magnolia event'), findsNothing);
+  });
+
   test(
     'date, day, and slot rules make incompatible ideas unavailable',
     () async {
@@ -198,7 +350,6 @@ void main() {
         startDay: WeekDay.sunday,
         startPart: DayPart.afternoon,
         slotLength: 1,
-        needsBooking: false,
         people: const [],
       );
 
@@ -227,7 +378,6 @@ void main() {
       firstDate: DateTime(2026, 1, 1),
       startPart: null,
       slotLength: 1,
-      needsBooking: false,
       people: const [],
     );
 
@@ -251,7 +401,7 @@ void main() {
     },
   );
 
-  test('schema one migrates through schema four without changing v1', () async {
+  test('schema one migrates through schema five without changing v1', () async {
     final activity = ActivityIdea(
       id: 'kept',
       name: 'Kept activity',
@@ -259,13 +409,13 @@ void main() {
       firstDate: DateTime(2027, 1, 1),
       startPart: DayPart.night,
       slotLength: 1,
-      needsBooking: false,
       people: const [],
     );
     final v1Activity = activity.toJson()
       ..remove('startDay')
       ..remove('frequencyCounterResetAt')
-      ..remove('tags');
+      ..remove('tags')
+      ..['needsBooking'] = false;
     final v1Database = jsonEncode({
       'schemaVersion': 1,
       'activities': [v1Activity],
@@ -280,18 +430,18 @@ void main() {
 
     final store = await PlannerStore.load();
     final preferences = await SharedPreferences.getInstance();
-    final v4Database =
-        jsonDecode(preferences.getString('weekend_planner_state_v4')!)
+    final v5Database =
+        jsonDecode(preferences.getString('weekend_planner_state_v5')!)
             as Map<String, dynamic>;
 
     expect(store.activities.single.id, 'kept');
     expect(store.activities.single.startDay, isNull);
     expect(store.activities.single.frequencyCounterResetAt, isNull);
     expect(store.activities.single.tags, isEmpty);
-    expect(jsonDecode(store.databaseJson())['schemaVersion'], 4);
-    expect(v4Database['schemaVersion'], 4);
+    expect(jsonDecode(store.databaseJson())['schemaVersion'], 5);
+    expect(v5Database['schemaVersion'], 5);
     expect(
-      (v4Database['activities'] as List<dynamic>).single['startDay'],
+      (v5Database['activities'] as List<dynamic>).single['startDay'],
       isNull,
     );
     expect(preferences.getString('weekend_planner_state_v1'), v1Database);
@@ -322,7 +472,7 @@ void main() {
     final migrated = jsonDecode(store.databaseJson()) as Map<String, dynamic>;
     final assignments = migrated['assignments'] as Map<String, dynamic>;
 
-    expect(migrated['schemaVersion'], 4);
+    expect(migrated['schemaVersion'], 5);
     expect(assignments.keys, contains('2026-07-25#morning'));
     expect(assignments.keys, contains('2026-07-25#afternoon'));
     expect(
@@ -334,20 +484,22 @@ void main() {
       for (final slot in PlannerSlot.defaults) slot.id,
     ]);
     expect(preferences.getString('weekend_planner_state_v2'), v2Database);
-    expect(preferences.getString('weekend_planner_state_v4'), isNotNull);
+    expect(preferences.getString('weekend_planner_state_v5'), isNotNull);
   });
 
   test('schema three adds empty tags without changing v3', () async {
-    final activity = ActivityIdea(
-      id: 'cinema',
-      name: 'Cinema',
-      rangeKind: DateRangeKind.anytime,
-      firstDate: DateTime(2026, 7, 26),
-      startPart: DayPart.night,
-      slotLength: 1,
-      needsBooking: false,
-      people: const [],
-    ).toJson()..remove('tags');
+    final activity =
+        ActivityIdea(
+            id: 'cinema',
+            name: 'Cinema',
+            rangeKind: DateRangeKind.anytime,
+            firstDate: DateTime(2026, 7, 26),
+            startPart: DayPart.night,
+            slotLength: 1,
+            people: const [],
+          ).toJson()
+          ..remove('tags')
+          ..['needsBooking'] = false;
     final v3Database = jsonEncode({
       'schemaVersion': 3,
       'activities': [activity],
@@ -366,9 +518,48 @@ void main() {
     final preferences = await SharedPreferences.getInstance();
 
     expect(store.activities.single.tags, isEmpty);
-    expect(jsonDecode(store.databaseJson())['schemaVersion'], 4);
+    expect(jsonDecode(store.databaseJson())['schemaVersion'], 5);
     expect(preferences.getString('weekend_planner_state_v3'), v3Database);
-    expect(preferences.getString('weekend_planner_state_v4'), isNotNull);
+    expect(preferences.getString('weekend_planner_state_v5'), isNotNull);
+  });
+
+  test('schema four removes booking without turning it into a tag', () async {
+    final activity = ActivityIdea(
+      id: 'cinema',
+      name: 'Cinema',
+      rangeKind: DateRangeKind.anytime,
+      firstDate: DateTime(2026, 7, 26),
+      startPart: DayPart.night,
+      slotLength: 1,
+      people: const [],
+      tags: const ['Film'],
+    ).toJson()..['needsBooking'] = true;
+    final v4Database = jsonEncode({
+      'schemaVersion': 4,
+      'activities': [activity],
+      'assignments': <String, dynamic>{},
+      'cachedPeople': <String>[],
+      'feeds': <dynamic>[],
+      'inbox': <dynamic>[],
+      'settings': <String, dynamic>{},
+      'eventLog': <dynamic>[],
+    });
+    SharedPreferences.setMockInitialValues({
+      'weekend_planner_state_v4': v4Database,
+    });
+
+    final store = await PlannerStore.load();
+    final preferences = await SharedPreferences.getInstance();
+    final migrated = jsonDecode(store.databaseJson()) as Map<String, dynamic>;
+    final migratedActivity =
+        (migrated['activities'] as List<dynamic>).single
+            as Map<String, dynamic>;
+
+    expect(store.activities.single.tags, ['Film']);
+    expect(migratedActivity, isNot(contains('needsBooking')));
+    expect(store.activities.single.tags, isNot(contains('booking')));
+    expect(preferences.getString('weekend_planner_state_v4'), v4Database);
+    expect(preferences.getString('weekend_planner_state_v5'), isNotNull);
   });
 
   testWidgets('activities can be filtered by tag without checkmarks', (
@@ -384,7 +575,6 @@ void main() {
         firstDate: DateTime(2026, 7, 26),
         startPart: null,
         slotLength: 1,
-        needsBooking: false,
         people: const [],
         tags: const ['Outdoors'],
       ),
@@ -395,7 +585,6 @@ void main() {
         firstDate: DateTime(2026, 7, 26),
         startPart: DayPart.night,
         slotLength: 1,
-        needsBooking: true,
         people: const [],
         tags: const ['Music'],
       ),
@@ -431,7 +620,6 @@ void main() {
       startDay: WeekDay.monday,
       startPart: DayPart.night,
       slotLength: 1,
-      needsBooking: false,
       people: const [],
     );
     store.activities.add(activity);
@@ -463,7 +651,6 @@ void main() {
         firstDate: DateTime(2026, 1, 1),
         startPart: null,
         slotLength: 1,
-        needsBooking: false,
         people: const [],
         isRecurring: true,
         desiredFrequencyWeeks: 4,

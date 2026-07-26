@@ -19,6 +19,7 @@ class ActivityFormPage extends StatefulWidget {
 class _ActivityFormPageState extends State<ActivityFormPage> {
   late final TextEditingController _nameController;
   late final TextEditingController _tagController;
+  late final FocusNode _tagFocusNode;
   late final TextEditingController _personController;
   late final TextEditingController _locationNameController;
   late final TextEditingController _coordinatesController;
@@ -31,7 +32,6 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
   late WeekDay? _startDay;
   late DayPart? _startPart;
   late int _slotLength;
-  late bool _needsBooking;
   late bool _isRecurring;
   late bool _hasFrequency;
   late int _frequencyWeeks;
@@ -47,6 +47,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
     final activity = widget.activity;
     _nameController = TextEditingController(text: activity?.name ?? '');
     _tagController = TextEditingController();
+    _tagFocusNode = FocusNode();
     _personController = TextEditingController();
     _locationNameController = TextEditingController(
       text: activity?.location?.name ?? '',
@@ -70,7 +71,6 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
     _startDay = activity?.startDay;
     _startPart = activity?.startPart;
     _slotLength = activity?.slotLength ?? 1;
-    _needsBooking = activity?.needsBooking ?? false;
     _isRecurring = activity?.isRecurring ?? false;
     _hasFrequency = activity?.desiredFrequencyWeeks != null;
     _frequencyWeeks = activity?.desiredFrequencyWeeks ?? 4;
@@ -82,6 +82,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
   void dispose() {
     _nameController.dispose();
     _tagController.dispose();
+    _tagFocusNode.dispose();
     _personController.dispose();
     _locationNameController.dispose();
     _coordinatesController.dispose();
@@ -147,16 +148,65 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: TextField(
-                  controller: _tagController,
-                  textCapitalization: TextCapitalization.sentences,
-                  textInputAction: TextInputAction.done,
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: _addTags,
-                  decoration: const InputDecoration(
-                    hintText: 'Outdoors, music…',
-                    prefixIcon: Icon(Icons.tag_rounded),
-                    helperText: 'Separate multiple tags with commas.',
+                child: RawAutocomplete<String>(
+                  textEditingController: _tagController,
+                  focusNode: _tagFocusNode,
+                  optionsBuilder: _tagAutocompleteOptions,
+                  onSelected: _addTags,
+                  fieldViewBuilder:
+                      (context, controller, focusNode, onFieldSubmitted) =>
+                          TextField(
+                            controller: controller,
+                            focusNode: focusNode,
+                            textCapitalization: TextCapitalization.sentences,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (value) {
+                              if (_tagAutocompleteOptions(
+                                controller.value,
+                              ).isEmpty) {
+                                _addTags(value);
+                              } else {
+                                onFieldSubmitted();
+                              }
+                            },
+                            decoration: const InputDecoration(
+                              hintText: 'Outdoors, music…',
+                              prefixIcon: Icon(Icons.tag_rounded),
+                              helperText:
+                                  'Autocomplete from existing tags; commas '
+                                  'add several.',
+                            ),
+                          ),
+                  optionsViewBuilder: (context, onSelected, options) => Align(
+                    alignment: Alignment.topLeft,
+                    child: Material(
+                      elevation: 5,
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(13),
+                      clipBehavior: Clip.antiAlias,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: 320,
+                          maxHeight: 220,
+                        ),
+                        child: ListView(
+                          padding: EdgeInsets.zero,
+                          shrinkWrap: true,
+                          children: [
+                            for (final option in options)
+                              ListTile(
+                                dense: true,
+                                leading: const Icon(
+                                  Icons.tag_rounded,
+                                  size: 18,
+                                ),
+                                title: Text(option),
+                                onTap: () => onSelected(option),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -170,21 +220,6 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
               ),
             ],
           ),
-          if (_tagSuggestions.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 7),
-              child: Wrap(
-                spacing: 7,
-                runSpacing: 7,
-                children: [
-                  for (final suggestion in _tagSuggestions)
-                    ActionChip(
-                      label: Text('#$suggestion'),
-                      onPressed: () => _addTags(suggestion),
-                    ),
-                ],
-              ),
-            ),
           const SizedBox(height: 22),
           const SectionLabel('Date range'),
           _RangeSelector(
@@ -322,12 +357,6 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
             ],
           ),
           const SizedBox(height: 20),
-          _SwitchSection(
-            title: 'Needs booking',
-            subtitle: 'It needs organizing before the planned date arrives.',
-            value: _needsBooking,
-            onChanged: (value) => setState(() => _needsBooking = value),
-          ),
           _SwitchSection(
             title: 'Recurring activity',
             subtitle: 'It remains reusable, but assignments are always manual.',
@@ -535,15 +564,14 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
         .toList();
   }
 
-  List<String> get _tagSuggestions {
-    final query = _tagController.text.trim().toLowerCase();
-    if (query.isEmpty || query.contains(',')) return const [];
+  Iterable<String> _tagAutocompleteOptions(TextEditingValue value) {
+    final query = value.text.trim().toLowerCase();
     final suggestions = <String>[];
     final seen = <String>{};
     for (final activity in widget.store.activities) {
       for (final tag in activity.tags) {
         final normalized = tag.toLowerCase();
-        if (!normalized.contains(query) ||
+        if ((query.isNotEmpty && !normalized.contains(query)) ||
             !seen.add(normalized) ||
             _tags.any((current) => current.toLowerCase() == normalized)) {
           continue;
@@ -552,7 +580,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
       }
     }
     suggestions.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-    return suggestions.take(5).toList();
+    return suggestions.take(8);
   }
 
   Future<void> _pickDate({required bool first}) async {
@@ -712,7 +740,6 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
         startDay: _startDay,
         startPart: _startPart,
         slotLength: _slotLength,
-        needsBooking: _needsBooking,
         people: List.unmodifiable(_people),
         tags: List.unmodifiable(_tags),
         isRecurring: _isRecurring,

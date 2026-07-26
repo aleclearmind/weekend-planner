@@ -3,45 +3,6 @@ import 'package:flutter/material.dart';
 import 'app_theme.dart';
 import 'models.dart';
 
-class BookingBadge extends StatelessWidget {
-  const BookingBadge({super.key, this.compact = false});
-
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: EdgeInsets.symmetric(
-      horizontal: compact ? 7 : 8,
-      vertical: compact ? 3 : 4,
-    ),
-    decoration: BoxDecoration(
-      color: AppColors.warningContainer,
-      borderRadius: BorderRadius.circular(7),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (!compact) ...[
-          const Icon(
-            Icons.event_available_rounded,
-            size: 15,
-            color: AppColors.warning,
-          ),
-          const SizedBox(width: 4),
-        ],
-        const Text(
-          'booking',
-          style: TextStyle(
-            color: AppColors.warning,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
 class FrequencyWarningBadge extends StatelessWidget {
   const FrequencyWarningBadge({required this.message, super.key});
 
