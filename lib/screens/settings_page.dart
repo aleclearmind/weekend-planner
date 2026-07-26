@@ -260,6 +260,7 @@ class _DaySlotSelector extends StatelessWidget {
             children: [
               for (final part in DayPart.values)
                 FilterChip(
+                  showCheckmark: false,
                   visualDensity: VisualDensity.compact,
                   label: Text(switch (part) {
                     DayPart.morning => 'AM',

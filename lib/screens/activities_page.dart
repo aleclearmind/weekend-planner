@@ -23,11 +23,23 @@ class ActivitiesPage extends StatefulWidget {
 
 class _ActivitiesPageState extends State<ActivitiesPage> {
   bool _bookingOnly = false;
+  String? _tagFilter;
 
   @override
   Widget build(BuildContext context) {
+    final tags = _availableTags;
+    final selectedTag = tags
+        .where((tag) => tag.toLowerCase() == _tagFilter?.toLowerCase())
+        .firstOrNull;
     final activities = widget.store.activities
-        .where((activity) => !_bookingOnly || activity.needsBooking)
+        .where(
+          (activity) =>
+              (!_bookingOnly || activity.needsBooking) &&
+              (selectedTag == null ||
+                  activity.tags.any(
+                    (tag) => tag.toLowerCase() == selectedTag.toLowerCase(),
+                  )),
+        )
         .toList();
     return Column(
       children: [
@@ -44,35 +56,60 @@ class _ActivitiesPageState extends State<ActivitiesPage> {
               ),
               FilterChip(
                 selected: _bookingOnly,
-                avatar: Icon(
-                  _bookingOnly
-                      ? Icons.check_rounded
-                      : Icons.filter_list_rounded,
-                  size: 17,
-                ),
+                showCheckmark: false,
+                avatar: const Icon(Icons.event_note_rounded, size: 17),
                 label: const Text('Needs booking'),
                 onSelected: (value) => setState(() => _bookingOnly = value),
               ),
             ],
           ),
         ),
+        if (tags.isNotEmpty)
+          SizedBox(
+            height: 43,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              children: [
+                ChoiceChip(
+                  showCheckmark: false,
+                  label: const Text('All tags'),
+                  selected: selectedTag == null,
+                  onSelected: (_) => setState(() => _tagFilter = null),
+                ),
+                const SizedBox(width: 7),
+                for (final tag in tags) ...[
+                  ChoiceChip(
+                    showCheckmark: false,
+                    label: Text('#$tag'),
+                    selected: selectedTag == tag,
+                    onSelected: (_) => setState(() => _tagFilter = tag),
+                  ),
+                  const SizedBox(width: 7),
+                ],
+              ],
+            ),
+          ),
         Expanded(
           child: activities.isEmpty
               ? EmptyState(
-                  icon: _bookingOnly
+                  icon: _bookingOnly || selectedTag != null
                       ? Icons.event_available_rounded
                       : Icons.lightbulb_outline_rounded,
-                  title: _bookingOnly
-                      ? 'Nothing needs booking'
+                  title: _bookingOnly || selectedTag != null
+                      ? 'No matching activities'
                       : 'No activity ideas yet',
-                  message: _bookingOnly
-                      ? 'Turn off the filter to see spontaneous activities.'
+                  message: _bookingOnly || selectedTag != null
+                      ? 'Clear the filters to see every activity idea.'
                       : 'Save things you would enjoy, then assign them to '
                             'planner slots.',
-                  action: _bookingOnly
+                  action: _bookingOnly || selectedTag != null
                       ? OutlinedButton(
-                          onPressed: () => setState(() => _bookingOnly = false),
-                          child: const Text('Show every idea'),
+                          onPressed: () => setState(() {
+                            _bookingOnly = false;
+                            _tagFilter = null;
+                          }),
+                          child: const Text('Clear filters'),
                         )
                       : FilledButton.icon(
                           onPressed: widget.onCreate,
@@ -96,6 +133,17 @@ class _ActivitiesPageState extends State<ActivitiesPage> {
         ),
       ],
     );
+  }
+
+  List<String> get _availableTags {
+    final tagsByKey = <String, String>{};
+    for (final activity in widget.store.activities) {
+      for (final tag in activity.tags) {
+        tagsByKey.putIfAbsent(tag.toLowerCase(), () => tag);
+      }
+    }
+    return tagsByKey.values.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
   }
 
   Future<void> _view(ActivityIdea activity) async {
@@ -198,6 +246,20 @@ class _ActivityCard extends StatelessWidget {
             if (frequencyWarning != null) ...[
               const SizedBox(height: 10),
               FrequencyWarningBadge(message: frequencyWarning!),
+            ],
+            if (activity.tags.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final tag in activity.tags)
+                    Chip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text('#$tag'),
+                    ),
+                ],
+              ),
             ],
             if (activity.people.isNotEmpty) ...[
               const SizedBox(height: 11),

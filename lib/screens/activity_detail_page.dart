@@ -63,6 +63,8 @@ class ActivityDetailPage extends StatelessWidget {
                     icon: Icons.timelapse_rounded,
                     label: activity.frequencyLabel!.toLowerCase(),
                   ),
+                for (final tag in activity.tags)
+                  _DetailBadge(icon: Icons.tag_rounded, label: tag),
               ],
             ),
             if (frequencyWarning != null) ...[

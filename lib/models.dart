@@ -120,6 +120,7 @@ class ActivityIdea {
     required this.slotLength,
     required this.needsBooking,
     required this.people,
+    this.tags = const [],
     this.isRecurring = false,
     this.desiredFrequencyWeeks,
     this.location,
@@ -142,6 +143,7 @@ class ActivityIdea {
   final int slotLength;
   final bool needsBooking;
   final List<Participant> people;
+  final List<String> tags;
   final bool isRecurring;
   final int? desiredFrequencyWeeks;
   final ActivityLocation? location;
@@ -163,6 +165,7 @@ class ActivityIdea {
     int? slotLength,
     bool? needsBooking,
     List<Participant>? people,
+    List<String>? tags,
     bool? isRecurring,
     int? desiredFrequencyWeeks,
     bool clearDesiredFrequency = false,
@@ -184,6 +187,7 @@ class ActivityIdea {
     slotLength: slotLength ?? this.slotLength,
     needsBooking: needsBooking ?? this.needsBooking,
     people: people ?? this.people,
+    tags: tags ?? this.tags,
     isRecurring: isRecurring ?? this.isRecurring,
     desiredFrequencyWeeks: clearDesiredFrequency
         ? null
@@ -240,6 +244,7 @@ class ActivityIdea {
     'slotLength': slotLength,
     'needsBooking': needsBooking,
     'people': people.map((person) => person.toJson()).toList(),
+    'tags': tags,
     'isRecurring': isRecurring,
     'desiredFrequencyWeeks': desiredFrequencyWeeks,
     'location': location?.toJson(),
@@ -275,6 +280,11 @@ class ActivityIdea {
       people: (json['people'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(Participant.fromJson)
+          .toList(),
+      tags: (json['tags'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .map((tag) => tag.trim())
+          .where((tag) => tag.isNotEmpty)
           .toList(),
       isRecurring: json['isRecurring'] as bool? ?? false,
       desiredFrequencyWeeks: (json['desiredFrequencyWeeks'] as num?)?.toInt(),

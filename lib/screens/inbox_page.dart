@@ -67,6 +67,7 @@ class _InboxPageState extends State<InboxPage> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               children: [
                 ChoiceChip(
+                  showCheckmark: false,
                   label: const Text('All sources'),
                   selected: selectedFeed == null,
                   onSelected: (_) => setState(() => _feedFilter = null),
@@ -74,6 +75,7 @@ class _InboxPageState extends State<InboxPage> {
                 const SizedBox(width: 7),
                 for (final feed in store.feeds) ...[
                   ChoiceChip(
+                    showCheckmark: false,
                     label: Text(feed.name),
                     selected: selectedFeed == feed.id,
                     onSelected: (_) => setState(() => _feedFilter = feed.id),

@@ -18,6 +18,7 @@ class ActivityFormPage extends StatefulWidget {
 
 class _ActivityFormPageState extends State<ActivityFormPage> {
   late final TextEditingController _nameController;
+  late final TextEditingController _tagController;
   late final TextEditingController _personController;
   late final TextEditingController _locationNameController;
   late final TextEditingController _coordinatesController;
@@ -35,6 +36,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
   late bool _hasFrequency;
   late int _frequencyWeeks;
   late List<Participant> _people;
+  late List<String> _tags;
 
   bool get _editing => widget.activity != null;
 
@@ -44,6 +46,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
     final now = dateOnly(DateTime.now());
     final activity = widget.activity;
     _nameController = TextEditingController(text: activity?.name ?? '');
+    _tagController = TextEditingController();
     _personController = TextEditingController();
     _locationNameController = TextEditingController(
       text: activity?.location?.name ?? '',
@@ -72,11 +75,13 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
     _hasFrequency = activity?.desiredFrequencyWeeks != null;
     _frequencyWeeks = activity?.desiredFrequencyWeeks ?? 4;
     _people = List<Participant>.from(activity?.people ?? const []);
+    _tags = List<String>.from(activity?.tags ?? const []);
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _tagController.dispose();
     _personController.dispose();
     _locationNameController.dispose();
     _coordinatesController.dispose();
@@ -106,6 +111,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
               onPressed: _confirmDelete,
               icon: const Icon(Icons.delete_outline_rounded),
             ),
+          TextButton(onPressed: _save, child: const Text('Save')),
           const SizedBox(width: 8),
         ],
       ),
@@ -120,6 +126,65 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
             textInputAction: TextInputAction.next,
             decoration: const InputDecoration(hintText: 'Activity name'),
           ),
+          const SizedBox(height: 22),
+          const SectionLabel('Tags'),
+          if (_tags.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Wrap(
+                spacing: 7,
+                runSpacing: 7,
+                children: [
+                  for (var index = 0; index < _tags.length; index++)
+                    InputChip(
+                      label: Text('#${_tags[index]}'),
+                      onDeleted: () => setState(() => _tags.removeAt(index)),
+                    ),
+                ],
+              ),
+            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _tagController,
+                  textCapitalization: TextCapitalization.sentences,
+                  textInputAction: TextInputAction.done,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: _addTags,
+                  decoration: const InputDecoration(
+                    hintText: 'Outdoors, music…',
+                    prefixIcon: Icon(Icons.tag_rounded),
+                    helperText: 'Separate multiple tags with commas.',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 9),
+              SizedBox(
+                height: 54,
+                child: FilledButton(
+                  onPressed: () => _addTags(_tagController.text),
+                  child: const Text('Add'),
+                ),
+              ),
+            ],
+          ),
+          if (_tagSuggestions.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Wrap(
+                spacing: 7,
+                runSpacing: 7,
+                children: [
+                  for (final suggestion in _tagSuggestions)
+                    ActionChip(
+                      label: Text('#$suggestion'),
+                      onPressed: () => _addTags(suggestion),
+                    ),
+                ],
+              ),
+            ),
           const SizedBox(height: 22),
           const SectionLabel('Date range'),
           _RangeSelector(
@@ -420,15 +485,6 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
                 ],
               ),
             ),
-          const SizedBox(height: 28),
-          SizedBox(
-            height: 50,
-            child: FilledButton.icon(
-              onPressed: _save,
-              icon: const Icon(Icons.check_rounded),
-              label: Text(_editing ? 'Save changes' : 'Save activity'),
-            ),
-          ),
         ],
       ),
     );
@@ -477,6 +533,26 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
         )
         .take(4)
         .toList();
+  }
+
+  List<String> get _tagSuggestions {
+    final query = _tagController.text.trim().toLowerCase();
+    if (query.isEmpty || query.contains(',')) return const [];
+    final suggestions = <String>[];
+    final seen = <String>{};
+    for (final activity in widget.store.activities) {
+      for (final tag in activity.tags) {
+        final normalized = tag.toLowerCase();
+        if (!normalized.contains(query) ||
+            !seen.add(normalized) ||
+            _tags.any((current) => current.toLowerCase() == normalized)) {
+          continue;
+        }
+        suggestions.add(tag);
+      }
+    }
+    suggestions.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return suggestions.take(5).toList();
   }
 
   Future<void> _pickDate({required bool first}) async {
@@ -554,6 +630,21 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
     });
   }
 
+  void _addTags(String value) {
+    final additions = value
+        .split(',')
+        .map((tag) => tag.trim().replaceFirst(RegExp(r'^#+'), '').trim())
+        .where((tag) => tag.isNotEmpty);
+    for (final tag in additions) {
+      final exists = _tags.any(
+        (current) => current.toLowerCase() == tag.toLowerCase(),
+      );
+      if (!exists) _tags.add(tag);
+    }
+    _tagController.clear();
+    setState(() {});
+  }
+
   void _cycleStatus(int index) {
     final current = _people[index];
     final next =
@@ -623,6 +714,7 @@ class _ActivityFormPageState extends State<ActivityFormPage> {
         slotLength: _slotLength,
         needsBooking: _needsBooking,
         people: List.unmodifiable(_people),
+        tags: List.unmodifiable(_tags),
         isRecurring: _isRecurring,
         desiredFrequencyWeeks: _isRecurring && _hasFrequency
             ? _frequencyWeeks

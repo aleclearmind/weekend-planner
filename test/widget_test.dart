@@ -9,6 +9,7 @@ import 'package:weekend_planner/location_parser.dart';
 import 'package:weekend_planner/main.dart';
 import 'package:weekend_planner/models.dart';
 import 'package:weekend_planner/planner_store.dart';
+import 'package:weekend_planner/screens/activities_page.dart';
 import 'package:weekend_planner/screens/activity_detail_page.dart';
 import 'package:weekend_planner/screens/activity_form_page.dart';
 import 'package:weekend_planner/screens/activity_picker_page.dart';
@@ -250,52 +251,51 @@ void main() {
     },
   );
 
-  test(
-    'schema one migrates through schema three without changing v1',
-    () async {
-      final activity = ActivityIdea(
-        id: 'kept',
-        name: 'Kept activity',
-        rangeKind: DateRangeKind.within,
-        firstDate: DateTime(2027, 1, 1),
-        startPart: DayPart.night,
-        slotLength: 1,
-        needsBooking: false,
-        people: const [],
-      );
-      final v1Activity = activity.toJson()
-        ..remove('startDay')
-        ..remove('frequencyCounterResetAt');
-      final v1Database = jsonEncode({
-        'schemaVersion': 1,
-        'activities': [v1Activity],
-        'assignments': <String, dynamic>{},
-        'cachedPeople': <String>[],
-        'feeds': <dynamic>[],
-        'inbox': <dynamic>[],
-      });
-      SharedPreferences.setMockInitialValues({
-        'weekend_planner_state_v1': v1Database,
-      });
+  test('schema one migrates through schema four without changing v1', () async {
+    final activity = ActivityIdea(
+      id: 'kept',
+      name: 'Kept activity',
+      rangeKind: DateRangeKind.within,
+      firstDate: DateTime(2027, 1, 1),
+      startPart: DayPart.night,
+      slotLength: 1,
+      needsBooking: false,
+      people: const [],
+    );
+    final v1Activity = activity.toJson()
+      ..remove('startDay')
+      ..remove('frequencyCounterResetAt')
+      ..remove('tags');
+    final v1Database = jsonEncode({
+      'schemaVersion': 1,
+      'activities': [v1Activity],
+      'assignments': <String, dynamic>{},
+      'cachedPeople': <String>[],
+      'feeds': <dynamic>[],
+      'inbox': <dynamic>[],
+    });
+    SharedPreferences.setMockInitialValues({
+      'weekend_planner_state_v1': v1Database,
+    });
 
-      final store = await PlannerStore.load();
-      final preferences = await SharedPreferences.getInstance();
-      final v3Database =
-          jsonDecode(preferences.getString('weekend_planner_state_v3')!)
-              as Map<String, dynamic>;
+    final store = await PlannerStore.load();
+    final preferences = await SharedPreferences.getInstance();
+    final v4Database =
+        jsonDecode(preferences.getString('weekend_planner_state_v4')!)
+            as Map<String, dynamic>;
 
-      expect(store.activities.single.id, 'kept');
-      expect(store.activities.single.startDay, isNull);
-      expect(store.activities.single.frequencyCounterResetAt, isNull);
-      expect(jsonDecode(store.databaseJson())['schemaVersion'], 3);
-      expect(v3Database['schemaVersion'], 3);
-      expect(
-        (v3Database['activities'] as List<dynamic>).single['startDay'],
-        isNull,
-      );
-      expect(preferences.getString('weekend_planner_state_v1'), v1Database);
-    },
-  );
+    expect(store.activities.single.id, 'kept');
+    expect(store.activities.single.startDay, isNull);
+    expect(store.activities.single.frequencyCounterResetAt, isNull);
+    expect(store.activities.single.tags, isEmpty);
+    expect(jsonDecode(store.databaseJson())['schemaVersion'], 4);
+    expect(v4Database['schemaVersion'], 4);
+    expect(
+      (v4Database['activities'] as List<dynamic>).single['startDay'],
+      isNull,
+    );
+    expect(preferences.getString('weekend_planner_state_v1'), v1Database);
+  });
 
   test('schema two migrates stable slot keys without changing v2', () async {
     final v2Database = jsonEncode({
@@ -322,7 +322,7 @@ void main() {
     final migrated = jsonDecode(store.databaseJson()) as Map<String, dynamic>;
     final assignments = migrated['assignments'] as Map<String, dynamic>;
 
-    expect(migrated['schemaVersion'], 3);
+    expect(migrated['schemaVersion'], 4);
     expect(assignments.keys, contains('2026-07-25#morning'));
     expect(assignments.keys, contains('2026-07-25#afternoon'));
     expect(
@@ -334,7 +334,88 @@ void main() {
       for (final slot in PlannerSlot.defaults) slot.id,
     ]);
     expect(preferences.getString('weekend_planner_state_v2'), v2Database);
-    expect(preferences.getString('weekend_planner_state_v3'), isNotNull);
+    expect(preferences.getString('weekend_planner_state_v4'), isNotNull);
+  });
+
+  test('schema three adds empty tags without changing v3', () async {
+    final activity = ActivityIdea(
+      id: 'cinema',
+      name: 'Cinema',
+      rangeKind: DateRangeKind.anytime,
+      firstDate: DateTime(2026, 7, 26),
+      startPart: DayPart.night,
+      slotLength: 1,
+      needsBooking: false,
+      people: const [],
+    ).toJson()..remove('tags');
+    final v3Database = jsonEncode({
+      'schemaVersion': 3,
+      'activities': [activity],
+      'assignments': <String, dynamic>{},
+      'cachedPeople': <String>[],
+      'feeds': <dynamic>[],
+      'inbox': <dynamic>[],
+      'settings': <String, dynamic>{},
+      'eventLog': <dynamic>[],
+    });
+    SharedPreferences.setMockInitialValues({
+      'weekend_planner_state_v3': v3Database,
+    });
+
+    final store = await PlannerStore.load();
+    final preferences = await SharedPreferences.getInstance();
+
+    expect(store.activities.single.tags, isEmpty);
+    expect(jsonDecode(store.databaseJson())['schemaVersion'], 4);
+    expect(preferences.getString('weekend_planner_state_v3'), v3Database);
+    expect(preferences.getString('weekend_planner_state_v4'), isNotNull);
+  });
+
+  testWidgets('activities can be filtered by tag without checkmarks', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PlannerStore.load();
+    store.activities.addAll([
+      ActivityIdea(
+        id: 'walk',
+        name: 'Long walk',
+        rangeKind: DateRangeKind.anytime,
+        firstDate: DateTime(2026, 7, 26),
+        startPart: null,
+        slotLength: 1,
+        needsBooking: false,
+        people: const [],
+        tags: const ['Outdoors'],
+      ),
+      ActivityIdea(
+        id: 'concert',
+        name: 'Concert',
+        rangeKind: DateRangeKind.anytime,
+        firstDate: DateTime(2026, 7, 26),
+        startPart: DayPart.night,
+        slotLength: 1,
+        needsBooking: true,
+        people: const [],
+        tags: const ['Music'],
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ActivitiesPage(store: store, onCreate: () {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('#Music').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Concert'), findsOneWidget);
+    expect(find.text('Long walk'), findsNothing);
+    expect(find.byIcon(Icons.check_rounded), findsNothing);
   });
 
   test('configured weekday slots keep assignments on stable keys', () async {

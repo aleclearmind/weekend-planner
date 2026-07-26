@@ -61,8 +61,9 @@ class _DiscoveredFeedLink {
 class PlannerStore extends ChangeNotifier {
   PlannerStore._(this._preferences, this._httpClient);
 
-  static const currentSchemaVersion = 3;
-  static const _storageKey = 'weekend_planner_state_v3';
+  static const currentSchemaVersion = 4;
+  static const _storageKey = 'weekend_planner_state_v4';
+  static const _legacyStorageKeyV3 = 'weekend_planner_state_v3';
   static const _legacyStorageKeyV2 = 'weekend_planner_state_v2';
   static const _legacyStorageKeyV1 = 'weekend_planner_state_v1';
   static const _maxLogEntries = 250;
@@ -97,6 +98,7 @@ class PlannerStore extends ChangeNotifier {
     final currentEncoded = preferences.getString(_storageKey);
     final encoded =
         currentEncoded ??
+        preferences.getString(_legacyStorageKeyV3) ??
         preferences.getString(_legacyStorageKeyV2) ??
         preferences.getString(_legacyStorageKeyV1);
     if (encoded == null) {
@@ -147,6 +149,9 @@ class PlannerStore extends ChangeNotifier {
         case 2:
           database = _migrateV2ToV3(database);
           version = 3;
+        case 3:
+          database = _migrateV3ToV4(database);
+          version = 4;
         default:
           throw StateError(
             'No migration registered for database schema $version.',
@@ -247,6 +252,19 @@ class PlannerStore extends ChangeNotifier {
     settings['includedCalendarIds'] = <String>[];
     database['settings'] = settings;
     database['schemaVersion'] = 3;
+    return database;
+  }
+
+  static Map<String, dynamic> _migrateV3ToV4(Map<String, dynamic> source) {
+    final database = Map<String, dynamic>.from(source);
+    final activities = source['activities'];
+    if (activities is List<dynamic>) {
+      database['activities'] = activities.map((rawActivity) {
+        if (rawActivity is! Map<String, dynamic>) return rawActivity;
+        return Map<String, dynamic>.from(rawActivity)..['tags'] = <String>[];
+      }).toList();
+    }
+    database['schemaVersion'] = 4;
     return database;
   }
 
