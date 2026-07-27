@@ -220,6 +220,7 @@
           ci = [
             { action = "sign-apk"; }
             { action = "release"; }
+            { action = "publish-fdroid"; }
           ];
           nativeBuildInputs = [
             flutter
